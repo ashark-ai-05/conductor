@@ -2,6 +2,7 @@
 //! ladder between failed attempts. Everything here is rule-based; the only model calls are
 //! the agents themselves.
 
+use crate::agent_panes;
 use crate::executor::{self, AgentRun, Brief};
 use crate::herdr_exec::PaneOutcome;
 use crate::live::Live;
@@ -328,14 +329,17 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         None,
         format!("worktree on branch {branch}"),
     )?;
+    // Where `conductor pane` records what agents do, when the workflow lets them open panes.
+    let actions_path = (wf.herdr.agent_control == AgentControl::OwnTab)
+        .then(|| dir.root.join("agent-actions.jsonl"));
     let mut live = Live::new(&dir, &run_id, &opts.task, &wf, &order(&wf.stages));
     live.save(&rec);
     let herdr_run = match std::mem::replace(&mut opts.mode, Mode::Headless) {
         Mode::Headless => None,
         Mode::Herdr(h) => {
             let mut hr = crate::herdr_exec::HerdrRun::new(h, &run_id);
-            if wf.herdr.agent_control == AgentControl::OwnTab {
-                hr = hr.with_agent_control(dir.root.join("agent-actions.jsonl"));
+            if let Some(a) = &actions_path {
+                hr = hr.with_agent_control(a.clone());
             }
             match hr
                 .herdr
@@ -382,10 +386,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let mut run_verdict = Verdict::Passed;
     let mut actions_seen = 0usize;
     let mut unmanaged_seen: BTreeSet<String> = BTreeSet::new();
-    let pane_help = herdr_run
-        .as_ref()
-        .filter(|hr| hr.agent_control())
-        .map(|_| pane_help());
+    let pane_help = actions_path.as_ref().map(|_| pane_help());
 
     for stage in order(&wf.stages) {
         if let Some(limit) = total_budget
@@ -497,11 +498,17 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 timeout: stage_timeout,
                 run_id: run_id.clone(),
                 attempt,
+                // In herdr the executor hands the grant to the pane; headless, it goes in the
+                // agent's environment.
+                env: match (&herdr_run, &actions_path) {
+                    (None, Some(a)) => agent_panes::local_env(a, &stage.id),
+                    _ => Vec::new(),
+                },
             };
             let agent = exec.run(&brief);
             record_agent(&mut rec, &stage.id, &agent)?;
-            if let Some(hr) = &herdr_run {
-                let actions = hr.agent_actions();
+            if let Some(path) = &actions_path {
+                let actions = agent_panes::read_actions(path);
                 for a in actions.iter().skip(actions_seen) {
                     rec.record(Source::Observed, Some(&a.stage), a.describe())?;
                 }
@@ -654,6 +661,19 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
             ),
         );
         records.push(stage_rec);
+        // Headless, nobody is watching a background pane: stop what the agent left running,
+        // whether or not the stage passed.
+        if let (None, Some(path)) = (&herdr_run, &actions_path) {
+            for (p, n) in agent_panes::stop_local(path, &stage.id) {
+                if n > 0 {
+                    rec.record(
+                        Source::Witnessed,
+                        Some(&stage.id),
+                        format!("stopped background pane {p} the agent left running"),
+                    )?;
+                }
+            }
+        }
         if let Some(hr) = &herdr_run {
             let passed = stage_verdict == Verdict::Passed;
             for p in hr.unmanaged() {

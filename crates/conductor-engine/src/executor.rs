@@ -21,6 +21,8 @@ pub struct Brief {
     pub timeout: Duration,
     pub run_id: String,
     pub attempt: usize,
+    /// Extra environment for the agent, such as the pane-control grant in a headless run.
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -89,11 +91,12 @@ impl Executor for Script {
     }
 
     fn run(&self, b: &Brief) -> AgentRun {
-        let env = [
+        let mut env = vec![
             ("CONDUCTOR_PROMPT".to_string(), b.prompt.clone()),
             ("CONDUCTOR_STAGE".to_string(), b.stage.clone()),
             ("CONDUCTOR_ATTEMPT".to_string(), b.attempt.to_string()),
         ];
+        env.extend(b.env.iter().cloned());
         let e = runner::run(&runner::Spec {
             argv: &b.agent.command,
             cwd: &b.cwd,
@@ -170,7 +173,7 @@ impl Executor for ClaudeHeadless {
             pass_env: &[],
             run_id: &b.run_id,
             inherit_env: true,
-            set_env: &[],
+            set_env: &b.env,
         });
         let mut run = parse_claude_stream(&e.stdout_text());
         run.duration_ms = e.duration_ms;
@@ -322,6 +325,7 @@ mod tests {
             timeout: Duration::from_secs(1),
             run_id: "r".into(),
             attempt: 2,
+            env: vec![],
         };
         let a = ClaudeHeadless::default().argv(&b);
         let joined = a.join(" ");

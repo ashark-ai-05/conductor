@@ -430,12 +430,15 @@ becomes a named sub-stage with its own hooks, evidence and line in the receipt. 
 paths and the scope check apply to every pane working in the run's worktree, so a
 sub-agent can't edit the locked tests either.
 
-**Headless runs** *(planned)*
+**Headless runs**
 
-Under the headless executor, `conductor pane split` + `run` will start the same command as
-a managed background process: its output captured, stopped at stage end, and recorded the
-same way, so a workflow that uses panes still runs in CI unchanged. Today `conductor pane`
-refuses outside a herdr run.
+Without herdr, the same `conductor pane` commands work on background processes, so a
+workflow that uses panes runs in CI unchanged. `split` names a pane (`local-1`, …); `run`
+starts the command under `sh -c` in its own process group, with stdin closed and output
+appended to `.conductor/runs/<id>/panes/<pane>.log`; `read` shows the log's tail; `close`
+stops the group. Nobody watches a background pane, so at the end of every stage, passed or
+not, conductor stops what its agent left running and records it. Actions and refusals are
+recorded exactly as in herdr.
 
 ### 11.3 Record integrity **[new]**
 - The chain head is written to a `Conductor-Chain:` trailer on the run's final commit. Once

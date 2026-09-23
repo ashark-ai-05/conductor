@@ -9,6 +9,7 @@
 //! The log sits outside the worktree but is writable by the agent, so its lines are recorded
 //! as `observed`, never `witnessed`.
 
+use crate::local_panes;
 use conductor_herdr::{Direction, Herdr, PaneInfo, Target};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -67,6 +68,33 @@ pub fn env(herdr: &Herdr, tab: &str, actions: &Path, stage: &str) -> Vec<(String
     e
 }
 
+/// The environment that grants pane control in a headless run, where panes are background
+/// processes (see [`crate::local_panes`]).
+pub fn local_env(actions: &Path, stage: &str) -> Vec<(String, String)> {
+    let mut e = vec![
+        (ENV_TAB.to_string(), local_panes::TAB.to_string()),
+        (ENV_ACTIONS.to_string(), actions.display().to_string()),
+        ("CONDUCTOR_STAGE".to_string(), stage.to_string()),
+    ];
+    if let Ok(me) = std::env::current_exe() {
+        e.push((ENV_BIN.to_string(), me.display().to_string()));
+    }
+    e
+}
+
+/// Stops the background panes a stage's agent left open in a headless run. Returns each
+/// with how many process groups were still running.
+pub fn stop_local(actions: &Path, stage: &str) -> Vec<(String, usize)> {
+    let dir = local_panes::dir(actions);
+    open_panes(&read_actions(actions), Some(stage))
+        .into_iter()
+        .map(|p| {
+            let n = local_panes::stop(&dir, &p);
+            (p, n)
+        })
+        .collect()
+}
+
 /// Every action in the log; lines that don't parse are skipped.
 pub fn read_actions(path: &Path) -> Vec<Action> {
     std::fs::read_to_string(path)
@@ -108,11 +136,9 @@ impl Grant {
     pub fn from_env(herdr: Herdr) -> Result<Self, String> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         let (Some(tab), Some(actions)) = (var(ENV_TAB), var(ENV_ACTIONS)) else {
-            return Err(
-                "pane control is only for agents in a conductor run in herdr, \
+            return Err("pane control is only for agents inside a conductor run, \
                         and only when the workflow allows it (herdr.agent_control: own_tab)"
-                    .into(),
-            );
+                .into());
         };
         Ok(Grant {
             herdr,
@@ -122,7 +148,29 @@ impl Grant {
         })
     }
 
+    fn local(&self) -> Option<PathBuf> {
+        (self.tab == local_panes::TAB).then(|| local_panes::dir(&self.actions))
+    }
+
     pub fn list(&self) -> Result<Vec<PaneInfo>, String> {
+        if let Some(dir) = self.local() {
+            return Ok(open_panes(&read_actions(&self.actions), None)
+                .into_iter()
+                .map(|p| PaneInfo {
+                    agent_status: Some(
+                        if local_panes::running(&dir, &p) {
+                            "running"
+                        } else {
+                            "idle"
+                        }
+                        .into(),
+                    ),
+                    pane_id: p,
+                    tab_id: local_panes::TAB.into(),
+                    cwd: None,
+                })
+                .collect());
+        }
         Ok(self
             .herdr
             .panes()
@@ -134,7 +182,9 @@ impl Grant {
 
     fn in_tab(&self, pane: &str) -> Result<(), String> {
         if self.list()?.iter().any(|p| p.pane_id == pane) {
-            self.herdr.adopt(pane);
+            if self.local().is_none() {
+                self.herdr.adopt(pane);
+            }
             Ok(())
         } else {
             Err(format!("pane {pane} is not in this run's tab"))
@@ -177,6 +227,15 @@ impl Grant {
 
     /// Opens a pane beside `from` (the caller's pane by default) and returns its id.
     pub fn split(&self, from: Option<&str>, down: bool, cwd: &Path) -> Result<String, String> {
+        if self.local().is_some() {
+            let n = read_actions(&self.actions)
+                .iter()
+                .filter(|a| a.action == "split")
+                .count();
+            let pane = format!("local-{}", n + 1);
+            self.log("split", &pane, "in the background")?;
+            return Ok(pane);
+        }
         let from = match from {
             Some(p) => p.to_owned(),
             None => std::env::var("HERDR_PANE_ID")
@@ -203,21 +262,36 @@ impl Grant {
 
     pub fn run(&self, pane: &str, command: &str) -> Result<(), String> {
         self.opened_by_agent(pane, "run")?;
-        self.herdr
-            .pane_run(pane, command)
-            .map_err(|e| e.to_string())?;
+        match self.local() {
+            Some(dir) => {
+                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                local_panes::run(&dir, pane, command, &cwd)?;
+            }
+            None => self
+                .herdr
+                .pane_run(pane, command)
+                .map_err(|e| e.to_string())?,
+        }
         self.log("run", pane, command)
     }
 
     /// Any pane in the run's tab may be read.
     pub fn read(&self, pane: &str, lines: u32) -> Result<String, String> {
         self.in_tab(pane)?;
-        self.herdr.pane_read(pane, lines).map_err(|e| e.to_string())
+        match self.local() {
+            Some(dir) => Ok(local_panes::read(&dir, pane, lines as usize)),
+            None => self.herdr.pane_read(pane, lines).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn close(&self, pane: &str) -> Result<(), String> {
         self.opened_by_agent(pane, "close")?;
-        self.herdr.pane_close(pane).map_err(|e| e.to_string())?;
+        match self.local() {
+            Some(dir) => {
+                local_panes::stop(&dir, pane);
+            }
+            None => self.herdr.pane_close(pane).map_err(|e| e.to_string())?,
+        }
         self.log("close", pane, "")
     }
 }

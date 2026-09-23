@@ -9,7 +9,7 @@ publish = false
 conductor-checks.workspace = true
 conductor-herdr.workspace = true
 conductor-model.workspace = true
-nix = { version = "0.29", features = ["signal"] }
+nix = { version = "0.29", features = ["signal", "process"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

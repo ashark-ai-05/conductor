@@ -201,3 +201,101 @@ stages:
         "{receipt:#}"
     );
 }
+
+/// Headless, the same commands start background processes: the agent reads their output,
+/// and conductor stops whatever is left running when the stage ends. No herdr needed.
+const HEADLESS_AGENT: &str = r#"set -e
+P=$("$CONDUCTOR_BIN" pane split)
+"$CONDUCTOR_BIN" pane run "$P" 'echo side-$((40+2)); sleep 60'
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  "$CONDUCTOR_BIN" pane read "$P" | grep -q side-42 && break
+  sleep 0.3
+done
+"$CONDUCTOR_BIN" pane read "$P" | grep -q side-42
+if "$CONDUCTOR_BIN" pane close local-9 2>/dev/null; then exit 3; fi
+mkdir -p notes && echo "background pane $P" > notes/out.md
+"#;
+
+#[test]
+fn headless_panes_are_background_processes_stopped_at_stage_end() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    fs::create_dir_all(p.join(".conductor/workflows")).unwrap();
+    fs::write(p.join(".gitignore"), "/.conductor/runs/\n").unwrap();
+    fs::write(
+        p.join(".conductor/workflows/side.yaml"),
+        format!(
+            r#"id: side-pane
+version: 1
+kind: build
+stages:
+  - id: work
+    agent: {{ kind: script, command: ["sh", "-c", {HEADLESS_AGENT:?}] }}
+    scope: {{ write: ["notes/**"] }}
+    outputs:
+      - {{ id: out, path: notes/out.md }}
+    gates:
+      - {{ type: scope }}
+      - {{ type: file_nonempty, ref: out }}
+"#
+        ),
+    )
+    .unwrap();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "t"]);
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "base"]);
+
+    let started = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_conductor"))
+        .args([
+            "run",
+            ".conductor/workflows/side.yaml",
+            "-m",
+            "open a side pane",
+            "--executor",
+            "headless",
+        ])
+        .current_dir(p)
+        .env("CONDUCTOR_HOME", p.join(".home"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "the background `sleep 60` must not hold the run open"
+    );
+
+    let run = fs::read_dir(p.join(".conductor/runs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let events = fs::read_to_string(run.join("events.jsonl")).unwrap();
+    for want in [
+        "agent opened pane local-1",
+        "agent ran `echo side-$((40+2)); sleep 60` in pane local-1",
+        "agent was refused close on pane local-9",
+        "stopped background pane local-1 the agent left running",
+    ] {
+        assert!(events.contains(want), "missing {want:?}\n{stdout}");
+    }
+    let pgid = fs::read_to_string(run.join("panes/local-1.pids")).unwrap();
+    // Any member of the group that is not a zombie still running?
+    let ps = Command::new("ps")
+        .args(["-eo", "pgid=,stat="])
+        .output()
+        .unwrap();
+    let alive = String::from_utf8_lossy(&ps.stdout).lines().any(|l| {
+        let mut f = l.split_whitespace();
+        f.next() == Some(pgid.trim()) && !f.next().unwrap_or("Z").starts_with('Z')
+    });
+    assert!(!alive, "the background process group was stopped");
+}
