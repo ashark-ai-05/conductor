@@ -5,15 +5,21 @@ use conductor_herdr::{Direction, Herdr, HerdrError, Target};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+/// One herdr server at a time: with two starting in the same process, one sometimes shuts
+/// itself down as it comes up, and the next call finds no server.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Session {
     bin: String,
     name: String,
     server: std::process::Child,
+    _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Session {
     fn start(name: &str) -> Option<Session> {
         let bin = std::env::var("CONDUCTOR_HERDR_BIN").ok()?;
+        let turn = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
         let name = format!("{name}-{}", std::process::id());
         let server = Command::new(&bin)
             .args(["--session", &name, "server"])
@@ -28,7 +34,12 @@ impl Session {
                 .map(|o| o.status.success())
                 .unwrap_or(false);
             if ok {
-                return Some(Session { bin, name, server });
+                return Some(Session {
+                    bin,
+                    name,
+                    server,
+                    _turn: turn,
+                });
             }
             std::thread::sleep(Duration::from_millis(200));
         }
