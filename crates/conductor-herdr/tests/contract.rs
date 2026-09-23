@@ -8,14 +8,16 @@ use std::time::{Duration, Instant};
 struct Session {
     bin: String,
     name: String,
+    server: std::process::Child,
 }
 
 impl Session {
     fn start(name: &str) -> Option<Session> {
         let bin = std::env::var("CONDUCTOR_HERDR_BIN").ok()?;
         let name = format!("{name}-{}", std::process::id());
-        Command::new(&bin)
+        let server = Command::new(&bin)
             .args(["--session", &name, "server"])
+            .stdout(std::process::Stdio::null())
             .spawn()
             .expect("start herdr server");
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -26,10 +28,13 @@ impl Session {
                 .map(|o| o.status.success())
                 .unwrap_or(false);
             if ok {
-                return Some(Session { bin, name });
+                return Some(Session { bin, name, server });
             }
             std::thread::sleep(Duration::from_millis(200));
         }
+        let mut server = server;
+        let _ = server.kill();
+        let _ = server.wait();
         panic!("herdr server did not come up");
     }
 
@@ -43,6 +48,7 @@ impl Drop for Session {
         let _ = Command::new(&self.bin)
             .args(["--session", &self.name, "server", "stop"])
             .output();
+        let _ = self.server.wait();
     }
 }
 
