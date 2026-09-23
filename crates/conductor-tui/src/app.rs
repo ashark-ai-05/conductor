@@ -57,6 +57,14 @@ pub struct App {
     /// A one-line message in the key bar, such as what a key would do in herdr.
     pub status: Option<String>,
     pub quit: bool,
+    /// Receipts behind the runs list, in the same order. Empty in the demo.
+    pub receipts: Vec<Receipt>,
+    /// A run waiting on a person: work, what it asks, herdr tab.
+    pub needs_you: Option<(String, String, u16)>,
+    /// Three headline numbers for the runs screen: value and label.
+    pub stats: [(String, String); 3],
+    /// Sample data that plays itself, or real runs read from disk.
+    pub demo: bool,
 }
 
 impl App {
@@ -73,6 +81,66 @@ impl App {
             launch: Launch::default(),
             status: None,
             quit: false,
+            receipts: vec![],
+            needs_you: demo::needs_you().map(|(w, a, t)| (w.into(), a.into(), t)),
+            stats: [
+                ("3 running".into(), "in herdr tabs 2–4".into()),
+                (
+                    "17%  ▁▂▁▃▃▅▄▆".into(),
+                    "caught: the agent said done, a check said no".into(),
+                ),
+                ("23".into(), "runs in the last 7 days".into()),
+            ],
+            demo: true,
+        }
+    }
+
+    /// The app over real runs, newest first.
+    pub fn from_receipts(receipts: Vec<Receipt>) -> Self {
+        let runs: Vec<RunSummary> = receipts
+            .iter()
+            .map(|r| RunSummary {
+                run_id: r.run_id.clone(),
+                work: r.work.clone(),
+                kind: r.kind.clone(),
+                status: r.verdict(),
+                checks: r.checks.iter().map(|c| c.verdict).collect(),
+                place: conductor_model::Place::Headless,
+            })
+            .collect();
+        let passed = runs
+            .iter()
+            .filter(|r| r.status == conductor_model::Verdict::Passed)
+            .count();
+        let stats = [
+            (
+                format!("{}", runs.len()),
+                "runs recorded in this repository".into(),
+            ),
+            (
+                format!("{passed} passed"),
+                "every check witnessed by conductor".into(),
+            ),
+            (
+                format!("{} did not pass", runs.len() - passed),
+                "open one to see which check stopped it".into(),
+            ),
+        ];
+        let mut app = App::demo();
+        app.receipt = receipts.first().cloned().unwrap_or_else(demo::receipt);
+        app.runs = runs;
+        app.receipts = receipts;
+        app.needs_you = None;
+        app.stats = stats;
+        app.demo = false;
+        app.live_step = usize::MAX;
+        app
+    }
+
+    /// Shows the receipt of the selected run, in real mode.
+    fn select_receipt(&mut self) {
+        if let Some(r) = self.receipts.get(self.selected) {
+            self.receipt = r.clone();
         }
     }
 
@@ -83,7 +151,7 @@ impl App {
 
     /// Called on a timer. Advances the demo run while its screen is open.
     pub fn tick(&mut self) {
-        if self.screen == Screen::Live && demo::step(&mut self.live, self.live_step) {
+        if self.demo && self.screen == Screen::Live && demo::step(&mut self.live, self.live_step) {
             self.live_step += 1;
         }
     }
@@ -153,7 +221,12 @@ impl App {
         }
         match key.code {
             KeyCode::Char(c @ '1'..='4') => self.go(Screen::ALL[(c as usize) - ('1' as usize)]),
-            KeyCode::Char('r') => self.go(Screen::Receipt),
+            KeyCode::Char('r') => {
+                if self.screen == Screen::Runs {
+                    self.select_receipt();
+                }
+                self.go(Screen::Receipt)
+            }
             KeyCode::Esc => self.go(Screen::Runs),
             KeyCode::Char('q') if self.screen == Screen::Runs => self.quit = true,
             _ => match self.screen {
@@ -173,7 +246,8 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Enter => {
                 let run = &self.runs[self.selected];
-                if run.is_finished() {
+                if run.is_finished() || !self.demo {
+                    self.select_receipt();
                     self.go(Screen::Receipt)
                 } else {
                     self.go(Screen::Live)
@@ -312,6 +386,22 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.screen, Screen::Live);
         assert!(!app.live_done());
+    }
+
+    #[test]
+    fn real_runs_open_their_own_receipts() {
+        let mut first = demo::receipt();
+        first.run_id = "A".into();
+        let mut second = demo::receipt();
+        second.run_id = "B".into();
+        second.checks[0].verdict = conductor_model::Verdict::Failed;
+        let mut app = App::from_receipts(vec![first, second]);
+        assert_eq!(app.runs[1].status, conductor_model::Verdict::Failed);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Receipt);
+        assert_eq!(app.receipt.run_id, "B");
+        assert!(app.needs_you.is_none());
     }
 
     #[test]

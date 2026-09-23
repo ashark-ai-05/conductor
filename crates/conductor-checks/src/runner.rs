@@ -58,6 +58,11 @@ pub struct Spec<'a> {
     /// Extra variable names the workflow asked to pass through.
     pub pass_env: &'a [String],
     pub run_id: &'a str,
+    /// Keep the whole ambient environment. Only for agents, which need their own
+    /// credentials; checks never get this.
+    pub inherit_env: bool,
+    /// Extra variables to set, such as the prompt for a scripted agent.
+    pub set_env: &'a [(String, String)],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -178,9 +183,15 @@ pub fn run(spec: &Spec) -> Execution {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
-        .env_clear()
-        .envs(std::env::vars().filter(|(k, _)| inherits(k)));
+        .process_group(0);
+    if !spec.inherit_env {
+        command
+            .env_clear()
+            .envs(std::env::vars().filter(|(k, _)| inherits(k)));
+    }
+    for (k, v) in spec.set_env {
+        command.env(k, v);
+    }
     for name in spec.pass_env {
         if let Ok(v) = std::env::var(name) {
             command.env(name, v);
@@ -288,6 +299,8 @@ mod tests {
             timeout,
             pass_env: &[],
             run_id: "r1",
+            inherit_env: false,
+            set_env: &[],
         })
     }
 
@@ -340,6 +353,8 @@ mod tests {
             timeout: Duration::from_secs(10),
             pass_env: &[],
             run_id: "r9",
+            inherit_env: false,
+            set_env: &[],
         });
         assert_eq!(e.stdout_text().trim(), "absent r9");
         assert!(
@@ -359,6 +374,8 @@ mod tests {
             timeout: Duration::from_secs(5),
             pass_env: &[],
             run_id: "r",
+            inherit_env: false,
+            set_env: &[],
         });
         assert_eq!(e.ended, Ended::NotRun);
         assert!(e.reason.unwrap().contains("could not start"));
@@ -373,6 +390,8 @@ mod tests {
             timeout: Duration::from_secs(5),
             pass_env: &[],
             run_id: "r",
+            inherit_env: false,
+            set_env: &[],
         });
         assert_eq!(e.ended, Ended::NotRun);
     }

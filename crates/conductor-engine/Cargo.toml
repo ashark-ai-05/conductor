@@ -1,0 +1,20 @@
+[package]
+name = "conductor-engine"
+version.workspace = true
+edition.workspace = true
+description = "Runs a workflow: stages, agents, checks, retries, and the record of it all"
+publish = false
+
+[dependencies]
+conductor-checks.workspace = true
+conductor-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time = { version = "0.3", features = ["formatting"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

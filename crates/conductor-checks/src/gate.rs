@@ -255,6 +255,8 @@ fn command_assert(
             timeout: ctx.timeout,
             pass_env: &[],
             run_id: ctx.run_id,
+            inherit_env: false,
+            set_env: &[],
         });
         if !exec.complete() {
             let why = exec
@@ -386,6 +388,8 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
         timeout: ctx.timeout,
         pass_env: &[],
         run_id: ctx.run_id,
+        inherit_env: false,
+        set_env: &[],
     });
     let mut result = GateResult::new(NAME, Verdict::Unwitnessed, "");
     let outcomes = out_dir.join("mutants.out").join("outcomes.json");

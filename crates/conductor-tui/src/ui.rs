@@ -148,7 +148,7 @@ fn bar(t: &Theme, checks: &[Verdict]) -> Line<'static> {
 // ── runs ────────────────────────────────────────────────────────────────────
 
 fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
-    let needs = conductor_model::demo::needs_you();
+    let needs = app.needs_you.clone();
     let [intro, _, stats, _, banner, list, _] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -177,15 +177,10 @@ fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         intro,
     );
 
-    let running = app
-        .runs
-        .iter()
-        .filter(|r| matches!(r.status, Verdict::Running | Verdict::Blocked))
-        .count();
-    let stat = |value: String, label: &'static str| {
+    let stat = |value: &str, label: &str| {
         Text::from(vec![
-            Line::from(Span::styled(value, t.bold())),
-            Line::from(Span::styled(label, t.dim())),
+            Line::from(Span::styled(value.to_owned(), t.bold())),
+            Line::from(Span::styled(label.to_owned(), t.dim())),
         ])
     };
     let [a, b, c] = Layout::horizontal([
@@ -194,21 +189,9 @@ fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Constraint::Min(0),
     ])
     .areas(stats);
-    f.render_widget(
-        Paragraph::new(stat(format!("{running} running"), "in herdr tabs 2–4")),
-        a,
-    );
-    f.render_widget(
-        Paragraph::new(stat(
-            "17%  ▁▂▁▃▃▅▄▆".into(),
-            "caught: the agent said done, a check said no",
-        )),
-        b,
-    );
-    f.render_widget(
-        Paragraph::new(stat("23".into(), "runs in the last 7 days")),
-        c,
-    );
+    for (area, (value, label)) in [a, b, c].into_iter().zip(app.stats.iter()) {
+        f.render_widget(Paragraph::new(stat(value, label)), area);
+    }
 
     if let Some((work, ask, tab)) = needs {
         let line = Line::from(vec![

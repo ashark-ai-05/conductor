@@ -237,7 +237,29 @@ impl Stage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agent {
+    /// `claude`, `codex`, or `script` (a command that stands in for an agent, used for
+    /// deterministic tests and demos).
     pub kind: String,
+    /// The command a `script` agent runs, in the stage's worktree.
+    #[serde(default)]
+    pub command: Vec<String>,
+    pub model: Option<String>,
+    /// How much the agent may do without asking. Defaults to accepting file edits only.
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
+    /// Extra tools the agent may use without asking, in the agent's own syntax, such as
+    /// `Bash(cargo test:*)`.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    #[default]
+    AcceptEdits,
+    /// The agent may run anything. Only for disposable environments.
+    Bypass,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -338,6 +360,22 @@ pub enum Parser {
 #[serde(rename_all = "snake_case")]
 pub enum MutationTool {
     CargoMutants,
+}
+
+/// `.conductor/policy.yaml`: rules the repository sets for every workflow (PRODUCT J5).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Policy {
+    /// Paths no agent may change.
+    #[serde(default)]
+    pub protected: Vec<String>,
+    pub min_mutation_score: Option<f64>,
+}
+
+impl Policy {
+    pub fn parse(text: &str) -> Result<Self, ParseError> {
+        Ok(serde_yaml::from_str(text)?)
+    }
 }
 
 /// One problem, with where it is.
@@ -498,6 +536,12 @@ impl Workflow {
     }
 
     fn validate_stage(&self, r: &mut Report, at: &str, s: &Stage, outputs: &Outputs) {
+        if s.agent.kind == "script" && s.agent.command.is_empty() {
+            r.error(
+                format!("{at}.agent.command"),
+                "a `script` agent needs a command to run",
+            );
+        }
         if s.agent.kind.trim().is_empty() {
             r.error(
                 format!("{at}.agent.kind"),
@@ -609,8 +653,6 @@ impl Workflow {
         }
     }
 
-    /// In a build workflow, the stage that writes the tests and the stage that must not touch
-    /// them should be different agents. Same agent is allowed, but called out.
     fn compile_all(
         &self,
         r: &mut Report,
@@ -637,6 +679,29 @@ impl Workflow {
     /// stage's output can be compared with real paths. `{{run_id}}` becomes a placeholder
     /// segment that matches nothing a stage would write by accident.
     fn resolve(&self, text: &str, outputs: &Outputs) -> String {
+        self.resolve_for(text, outputs, "RUN")
+    }
+
+    /// `text` with every template replaced for a real run: output references become the
+    /// declared paths, `{{run_id}}` the run's id, `{{artifact_root}}` the resolved root.
+    pub fn render(&self, text: &str, run_id: &str) -> String {
+        let outputs: Outputs = self
+            .stages
+            .iter()
+            .map(|s| {
+                (
+                    s.id.as_str(),
+                    s.outputs
+                        .iter()
+                        .map(|o| (o.id.as_str(), o.path.as_str()))
+                        .collect(),
+                )
+            })
+            .collect();
+        self.resolve_for(text, &outputs, run_id)
+    }
+
+    fn resolve_for(&self, text: &str, outputs: &Outputs, run_id: &str) -> String {
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
         while let Some(start) = rest.find("{{") {
@@ -648,12 +713,12 @@ impl Workflow {
             };
             let key = after[..end].trim();
             let value = match key {
-                "run_id" => "RUN".to_owned(),
-                "artifact_root" => self.resolve(&self.runtime.artifact_root, outputs),
+                "run_id" => run_id.to_owned(),
+                "artifact_root" => self.resolve_for(&self.runtime.artifact_root, outputs, run_id),
                 _ => referenced_outputs(&format!("{{{{{key}}}}}"))
                     .first()
                     .and_then(|(st, o)| outputs.get(st.as_str()).and_then(|m| m.get(o.as_str())))
-                    .map(|p| self.resolve(p, outputs))
+                    .map(|p| self.resolve_for(p, outputs, run_id))
                     .unwrap_or_default(),
             };
             out.push_str(&value);
@@ -663,6 +728,8 @@ impl Workflow {
         out
     }
 
+    /// In a build workflow, the stage that writes the tests and the stage that must not touch
+    /// them should be different agents. Same agent is allowed, but called out.
     fn separation_of_duties(&self, r: &mut Report) {
         for (i, s) in self.stages.iter().enumerate() {
             for f in &s.scope.frozen {
@@ -913,6 +980,27 @@ mod tests {
             "{:?}",
             r.warnings
         );
+    }
+
+    #[test]
+    fn templates_render_to_real_paths_for_a_run() {
+        let wf = Workflow::parse(EXAMPLE).unwrap();
+        assert_eq!(
+            wf.render("{{stages.tests.outputs.tests.path}}", "01ABC"),
+            "tests/generated_tests.rs"
+        );
+        assert_eq!(
+            wf.render("{{stages.spec.outputs.spec.path}}", "01ABC"),
+            ".conductor/01ABC/spec.md"
+        );
+    }
+
+    #[test]
+    fn a_script_agent_needs_a_command() {
+        let text =
+            "id: x\nversion: 1\nkind: build\nstages:\n  - id: a\n    agent: { kind: script }\n";
+        let r = Workflow::parse(text).unwrap().validate();
+        assert!(messages(&r).iter().any(|m| m.contains("needs a command")));
     }
 
     #[test]

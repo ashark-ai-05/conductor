@@ -20,6 +20,7 @@ sha2 = "0.10"
 thiserror = "2"
 conductor-model = { path = "crates/conductor-model" }
 conductor-checks = { path = "crates/conductor-checks" }
+conductor-engine = { path = "crates/conductor-engine" }
 conductor-tui = { path = "crates/conductor-tui" }
 
 [workspace.lints.rust]
@@ -41,6 +42,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+conductor-engine.workspace = true
 conductor-model.workspace = true
 conductor-tui.workspace = true
 
