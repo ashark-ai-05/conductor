@@ -119,6 +119,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
         base,
         task,
         watcher: Some(tx),
+        home: None,
     });
     let _ = printer.join();
     let outcome = outcome?;

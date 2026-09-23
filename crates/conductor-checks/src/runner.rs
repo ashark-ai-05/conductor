@@ -65,6 +65,32 @@ pub struct Spec<'a> {
     pub set_env: &'a [(String, String)],
 }
 
+/// Variables that tie a Claude Code process to the session that launched it. An agent
+/// conductor starts must be its own session, never a child that resumes or reports into
+/// whoever ran conductor, so these are removed even when the rest is inherited.
+pub fn couples_to_parent_session(key: &str) -> bool {
+    matches!(key, "CLAUDECODE" | "CLAUDE_PID" | "AI_AGENT")
+        || [
+            "CLAUDE_CODE_SESSION",
+            "CLAUDE_CODE_CHILD",
+            "CLAUDE_CODE_REMOTE_SESSION",
+            "CLAUDE_CODE_MESSAGING",
+            "CLAUDE_CODE_ARTIFACT",
+            "CLAUDE_CODE_SYNC",
+            "CLAUDE_CODE_TEE",
+            "CLAUDE_CODE_BG_",
+            "CLAUDE_CODE_DIAGNOSTICS",
+            "CLAUDE_AUTO_BACKGROUND",
+            "CLAUDE_AFTER_LAST_COMPACT",
+            "CLAUDE_CODE_POST_FOR",
+            "CLAUDE_CODE_HOLD_",
+            "CLAUDE_CODE_WORKER",
+            "CLAUDE_CODE_BASE_REF",
+        ]
+        .iter()
+        .any(|p| key.starts_with(p))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ended {
@@ -184,7 +210,11 @@ pub fn run(spec: &Spec) -> Execution {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    if !spec.inherit_env {
+    if spec.inherit_env {
+        for (k, _) in std::env::vars().filter(|(k, _)| couples_to_parent_session(k)) {
+            command.env_remove(k);
+        }
+    } else {
         command
             .env_clear()
             .envs(std::env::vars().filter(|(k, _)| inherits(k)));
@@ -362,6 +392,16 @@ mod tests {
                 && !inherits("GITHUB_TOKEN")
                 && !inherits("SSH_AUTH_SOCK")
         );
+    }
+
+    #[test]
+    fn an_agent_keeps_its_credentials_but_not_its_parents_session() {
+        assert!(couples_to_parent_session("CLAUDECODE"));
+        assert!(couples_to_parent_session("CLAUDE_CODE_SESSION_ID"));
+        assert!(couples_to_parent_session("CLAUDE_CODE_REMOTE_SESSION_ID"));
+        assert!(!couples_to_parent_session("ANTHROPIC_API_KEY"));
+        assert!(!couples_to_parent_session("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(!couples_to_parent_session("HOME"));
     }
 
     #[test]

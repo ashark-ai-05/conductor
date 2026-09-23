@@ -40,7 +40,11 @@ fn repo(implement: &str) -> tempfile::TempDir {
         "pub fn clamp(_x: i32) -> i32 { todo!() }\n",
     )
     .unwrap();
-    fs::write(p.join(".gitignore"), "/target\n/.conductor/runs/\n").unwrap();
+    fs::write(
+        p.join(".gitignore"),
+        "/target\n/.conductor/runs/\n/.test-conductor-home/\n",
+    )
+    .unwrap();
     let write_tests = format!("mkdir -p tests && cat > tests/clamp.rs <<'EOF'\n{TESTS}EOF\n");
     let workflow = format!(
         r#"id: scripted-build
@@ -102,6 +106,7 @@ fn options(dir: &Path) -> Options {
         base: "HEAD".into(),
         task: "# Clamp values above 10\n\nclamp(x) returns 10 for anything above 10.".into(),
         watcher: None,
+        home: Some(dir.join(".test-conductor-home")),
     }
 }
 

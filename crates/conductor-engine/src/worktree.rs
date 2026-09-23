@@ -46,17 +46,40 @@ pub fn resolve(repo: &Path, rev: &str) -> Result<String, GitError> {
     )
 }
 
-/// Adds a worktree for the run under the repository's git directory, where `git status` in
-/// the user's checkout never sees it, on a branch named for the run.
-pub fn create(repo: &Path, run_id: &str, base: &str) -> Result<(PathBuf, String), GitError> {
-    let common = git(
-        repo,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    let path = PathBuf::from(common)
-        .join("conductor")
-        .join("worktrees")
-        .join(run_id);
+/// Where conductor keeps its own state outside any repository: `$CONDUCTOR_HOME`, else
+/// `$XDG_DATA_HOME/conductor`, else `~/.local/share/conductor`.
+pub fn conductor_home() -> PathBuf {
+    if let Some(h) = std::env::var_os("CONDUCTOR_HOME") {
+        return PathBuf::from(h);
+    }
+    if let Some(x) = std::env::var_os("XDG_DATA_HOME") {
+        return PathBuf::from(x).join("conductor");
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    home.join(".local").join("share").join("conductor")
+}
+
+/// Adds a worktree for the run on a branch named for it.
+///
+/// The worktree lives outside the repository. Inside `.git` an agent may refuse to write at
+/// all (Claude Code protects `.git`), and inside the checkout it would show up in
+/// `git status` and could be mistaken for part of the project by build tools.
+pub fn create(
+    repo: &Path,
+    run_id: &str,
+    base: &str,
+    home: &Path,
+) -> Result<(PathBuf, String), GitError> {
+    let name = repo
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".into());
+    let path = home.join("worktrees").join(&name).join(run_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let branch = format!("conductor/{run_id}");
     git(
         repo,

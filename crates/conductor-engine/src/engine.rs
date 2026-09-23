@@ -37,6 +37,8 @@ pub struct Options {
     /// What to build: the spec file's contents or a one-line description.
     pub task: String,
     pub watcher: Option<Sender<Event>>,
+    /// Where worktrees go; defaults to [`worktree::conductor_home`].
+    pub home: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -272,7 +274,12 @@ pub fn run(opts: Options) -> Result<Outcome, EngineError> {
         None,
         format!("run started: {} at {}", wf.id, &base[..base.len().min(12)]),
     )?;
-    let (wt, branch) = worktree::create(&opts.repo, &run_id, &base)?;
+    let (wt, branch) = worktree::create(
+        &opts.repo,
+        &run_id,
+        &base,
+        &opts.home.clone().unwrap_or_else(worktree::conductor_home),
+    )?;
     rec.record(
         Source::Witnessed,
         None,
@@ -379,7 +386,13 @@ pub fn run(opts: Options) -> Result<Outcome, EngineError> {
             };
             let agent = exec.run(&brief);
             record_agent(&mut rec, &stage.id, &agent)?;
-            session = agent.session_id.clone().or(session);
+            // A session id inherited from whoever launched conductor is not this agent's.
+            let parent = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
+            session = agent
+                .session_id
+                .clone()
+                .filter(|s| Some(s) != parent.as_ref())
+                .or(session);
             stage_rec.add_agent(&agent);
 
             if !agent.finished {
