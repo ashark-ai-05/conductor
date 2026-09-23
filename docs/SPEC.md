@@ -290,6 +290,22 @@ One event stream feeds two sinks:
 - `conductor trace <run>` renders a run's spans locally without any backend. Each receipt
   carries its trace id; each trace carries its receipt hash.
 
+**Built so far.**
+- Traces and logs are exported over OTLP/HTTP with JSON bodies (`/v1/traces`, `/v1/logs`),
+  with no vendor SDK. Set `CONDUCTOR_OTLP_ENDPOINT`, or the standard
+  `OTEL_EXPORTER_OTLP_ENDPOINT`. `OTEL_EXPORTER_OTLP_HEADERS` carries API keys.
+- The export happens once the run ends, not live. Spans are derived from the event chain,
+  so the export, `conductor trace` and the receipt always agree. Trace and span ids are
+  derived from the run id.
+- Tool calls are recorded when the agent returns. They are therefore events on the agent's
+  span rather than spans of their own, and an agent's span ends at its first recorded
+  evidence.
+- `observed` events (tool calls, commands an agent ran) are exported as their first word
+  unless `CONDUCTOR_OTLP_CONTENT=1` is set. Checks, verdicts and conductor's own events are
+  exported whole.
+- A failed export is a warning. It never changes a run's verdict.
+- Metrics are not exported yet.
+
 ### 9.10 Reuse
 - `promote` turns a successful `adhoc` or `plan` run into a reusable workflow file.
 - `recall` searches past runs by symptom with lexical search over manifests and claims. No

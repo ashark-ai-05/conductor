@@ -17,6 +17,9 @@ usage:
                                      each run gets a tab and each stage a pane
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
+  conductor trace [<run-id>] [--export]
+                                     show a run's stages, attempts and checks as a
+                                     trace; --export sends it over OTLP
   conductor ui [--run <id>] [--demo] [--light]
                                      open the terminal UI over this repository's runs,
                                      including ones in progress
@@ -44,6 +47,7 @@ fn real_main() -> Result<ExitCode> {
         Some("run") => run(&args[1..]),
         Some("receipt") => receipt(&args[1..]),
         Some("verify") => verify_cmd(&args[1..]),
+        Some("trace") => trace_cmd(&args[1..]),
         Some("ui") => ui(&args[1..]),
         Some("validate") => validate(&args[1..]),
         Some("pane") => pane(&args[1..]),
@@ -161,6 +165,11 @@ fn run(args: &[String]) -> Result<ExitCode> {
         outcome.worktree.display(),
         outcome.branch
     );
+    match &outcome.export {
+        Some(Ok(id)) => println!("  exported  trace {id} over OTLP"),
+        Some(Err(e)) => eprintln!("  warning   the OTLP export failed: {e}"),
+        None => {}
+    }
     Ok(if outcome.verdict == Verdict::Passed {
         ExitCode::SUCCESS
     } else {
@@ -220,6 +229,39 @@ fn receipt(args: &[String]) -> Result<ExitCode> {
     };
     let r = read_receipt(&repo, &id).map_err(anyhow::Error::msg)?;
     print_receipt(&r);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn trace_cmd(args: &[String]) -> Result<ExitCode> {
+    let export = args.iter().any(|a| a == "--export");
+    if let Some(bad) = args.iter().find(|a| a.starts_with('-') && *a != "--export") {
+        bail!("unknown option `{bad}` for `conductor trace`");
+    }
+    let repo = repo_root()?;
+    let id = match args.iter().find(|a| !a.starts_with('-')) {
+        Some(id) => id.clone(),
+        None => list_runs(&repo)
+            .into_iter()
+            .next()
+            .context("no runs recorded in this repository yet")?,
+    };
+    let dir = conductor_engine::store::RunDir::for_run(&repo, &id);
+    let events = dir
+        .read_events()
+        .with_context(|| format!("no record for run {id}"))?;
+    print!(
+        "{}",
+        conductor_engine::trace::render(&conductor_engine::trace::build(&id, &events))
+    );
+    if export {
+        let cfg = conductor_engine::otlp::Config::from_env().context(
+            "set CONDUCTOR_OTLP_ENDPOINT (or OTEL_EXPORTER_OTLP_ENDPOINT) to export, e.g. http://localhost:4318",
+        )?;
+        let tid =
+            conductor_engine::otlp::export(&cfg, &id, &events, dir.receipt_sha256().as_deref())
+                .map_err(anyhow::Error::msg)?;
+        println!("\nexported trace {tid} to {}", cfg.endpoint);
+    }
     Ok(ExitCode::SUCCESS)
 }
 

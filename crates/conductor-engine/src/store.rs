@@ -37,6 +37,16 @@ impl RunDir {
         self.root.join("receipt.json")
     }
 
+    /// The receipt file's hash, as a trace carries it.
+    pub fn receipt_sha256(&self) -> Option<String> {
+        use sha2::Digest;
+        let bytes = std::fs::read(self.receipt()).ok()?;
+        Some(format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(&bytes))
+        ))
+    }
+
     pub fn gates(&self) -> PathBuf {
         self.root.join("gates.json")
     }

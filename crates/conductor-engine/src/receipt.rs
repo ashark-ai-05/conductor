@@ -256,6 +256,13 @@ pub fn build(
             "wall clock".to_string(),
             format!("{}m{:02}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60),
         ),
+        (
+            "trace".to_string(),
+            format!(
+                "{} · `conductor trace {run_id}`",
+                crate::trace::trace_id(run_id)
+            ),
+        ),
     ];
 
     let reproduces = conductor_model::Chain::verify(rec.events()).is_ok();

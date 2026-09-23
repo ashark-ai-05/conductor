@@ -65,6 +65,9 @@ pub struct Outcome {
     pub dir: RunDir,
     pub worktree: PathBuf,
     pub branch: String,
+    /// The OTLP export, when an endpoint is configured: the trace id, or why it failed.
+    /// A failed export never fails the run.
+    pub export: Option<Result<String, String>>,
 }
 
 /// Paths an agent may never change, whatever the workflow says: conductor's own config.
@@ -762,6 +765,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     );
     dir.write_json(&dir.receipt(), &receipt)?;
     let verdict = receipt.verdict();
+    let export = crate::otlp::Config::from_env().map(|cfg| export_run(&cfg, &dir, &run_id, &rec));
     Ok(Outcome {
         run_id,
         verdict,
@@ -769,7 +773,18 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         dir,
         worktree: wt,
         branch,
+        export,
     })
+}
+
+/// Sends a finished run to an OTLP collector, tagged with its receipt's hash.
+fn export_run(
+    cfg: &crate::otlp::Config,
+    dir: &RunDir,
+    run_id: &str,
+    rec: &Recorder,
+) -> Result<String, String> {
+    crate::otlp::export(cfg, run_id, rec.events(), dir.receipt_sha256().as_deref())
 }
 
 /// Test names present before the stage runs, so a gate can count the ones it added.
