@@ -147,6 +147,9 @@ fn run(args: &[String]) -> Result<ExitCode> {
         task,
         watcher: Some(tx),
         home: None,
+        status_ui: matches!(mode, Mode::Herdr(_))
+            .then(|| std::env::current_exe().ok())
+            .flatten(),
         mode,
     });
     let _ = printer.join();

@@ -44,6 +44,8 @@ pub struct Options {
     /// Where worktrees go; defaults to [`worktree::conductor_home`].
     pub home: Option<PathBuf>,
     pub mode: Mode,
+    /// In herdr, the conductor binary to show the run's live view with, in the run's tab.
+    pub status_ui: Option<PathBuf>,
 }
 
 /// Where agents run. The workflow and its receipt are the same either way.
@@ -347,6 +349,13 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                         format!("herdr protocol {p}; run tab {}", t.tab_id),
                     )?;
                     live.set_tab(&t.tab_id);
+                    if let Some(bin) = &opts.status_ui {
+                        let what = match hr.open_status_pane(bin, &opts.repo) {
+                            Ok(p) => format!("status pane {p} shows the run live"),
+                            Err(e) => format!("no status pane: {e}"),
+                        };
+                        rec.record(Source::Witnessed, None, what)?;
+                    }
                     Some(hr)
                 }
                 Err(e) => {

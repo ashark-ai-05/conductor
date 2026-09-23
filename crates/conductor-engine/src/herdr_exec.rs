@@ -34,6 +34,9 @@ struct RunPanes {
     last_pane: Option<String>,
     /// stage → (pane, agent name)
     stages: BTreeMap<String, (String, Option<String>)>,
+    /// The pane showing the run's live view. While it is open, the tab never runs out of
+    /// panes, so every passed stage's pane can be closed.
+    status: Option<String>,
 }
 
 /// What happened to a stage's pane when the stage ended.
@@ -131,6 +134,7 @@ impl HerdrRun {
             let st = self.lock();
             known.extend(st.stages.values().map(|e| e.0.clone()));
             known.extend(st.free.clone());
+            known.extend(st.status.clone());
         }
         panes
             .into_iter()
@@ -165,6 +169,30 @@ impl HerdrRun {
         st.tab = Some(tab.clone());
         st.free = Some(tab.root_pane.clone());
         Ok(tab)
+    }
+
+    /// Shows the run's live view (`conductor ui --run`) in the tab's first pane; stage panes
+    /// open to its right.
+    pub fn open_status_pane(&self, bin: &Path, repo: &Path) -> Result<String, HerdrError> {
+        self.open_tab(repo)?;
+        let mut st = self.lock();
+        let pane = st.free.take().ok_or_else(|| HerdrError::Shape {
+            args: "tab create".into(),
+            detail: "the run's tab has no free pane for the status view".into(),
+        })?;
+        let cmd = format!(
+            "cd {} && {} ui --run {}",
+            quote(&repo.display().to_string()),
+            quote(&bin.display().to_string()),
+            quote(&self.run_id)
+        );
+        if let Err(e) = self.herdr.pane_run(&pane, &cmd) {
+            st.free = Some(pane);
+            return Err(e);
+        }
+        st.status = Some(pane.clone());
+        st.last_pane = Some(pane.clone());
+        Ok(pane)
     }
 
     /// A pane for a stage: the tab's root for the first, a split after that.
@@ -223,7 +251,7 @@ impl HerdrRun {
         let Some((pane, _)) = st.stages.remove(stage) else {
             return PaneOutcome::LeftOpen;
         };
-        if st.stages.is_empty() && st.free.is_none() {
+        if st.stages.is_empty() && st.free.is_none() && st.status.is_none() {
             st.free = Some(pane);
             return PaneOutcome::Kept;
         }

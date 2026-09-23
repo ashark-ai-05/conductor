@@ -392,7 +392,7 @@ recorded.
 
 | Actor | Can | Default limits |
 |---|---|---|
-| Orchestrator | open a tab per run; open a pane per stage; close a pane when its stage passes; keep failed or blocked panes open; focus, rename, move | only tabs and panes it created |
+| Orchestrator | open a tab per run, with the run's live view (`conductor ui --run <id>`) in its first pane; open a pane per stage beside it; close a pane when its stage passes; keep failed or blocked panes open; focus, rename, move | only tabs and panes it created |
 | Agent (from inside its pane) | open panes in its own run's tab (a shell, a dev server, a log tail); send input to and read from those panes; close panes it opened | its own run's tab only; cannot touch other runs' panes or the conductor pane; cannot start another agent unless the workflow allows it |
 | Human | anything, from herdr or from the conductor pane | recorded as `human` events |
 

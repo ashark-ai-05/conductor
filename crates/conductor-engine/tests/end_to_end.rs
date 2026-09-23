@@ -108,6 +108,7 @@ fn options(dir: &Path) -> Options {
         watcher: None,
         home: Some(dir.join(".test-conductor-home")),
         mode: conductor_engine::Mode::Headless,
+        status_ui: None,
     }
 }
 

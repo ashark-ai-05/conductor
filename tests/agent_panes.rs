@@ -140,6 +140,39 @@ stages:
             .iter()
             .any(|e| e["source"] == source && e["what"].as_str().unwrap_or("").starts_with(prefix))
     };
+    // The run's tab shows its live view beside the stage, so the stage's own pane can close.
+    assert!(said("witnessed", "status pane "), "{stdout}");
+    assert!(said("witnessed", "closed the stage's pane"), "{stdout}");
+    let status = events
+        .iter()
+        .filter_map(|e| e["what"].as_str()?.strip_prefix("status pane "))
+        .find_map(|rest| rest.split_whitespace().next())
+        .unwrap()
+        .to_owned();
+    let mut screen = String::new();
+    for _ in 0..40 {
+        let o = Command::new(&bin)
+            .args([
+                "--session",
+                &session,
+                "pane",
+                "read",
+                &status,
+                "--source",
+                "visible",
+            ])
+            .output()
+            .unwrap();
+        screen = String::from_utf8_lossy(&o.stdout).into_owned();
+        if screen.contains("the run passed") || screen.contains("every check passed") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(
+        screen.contains("every check passed"),
+        "the status pane shows the finished run:\n{screen}"
+    );
     assert!(said("observed", "agent opened pane "), "{stdout}");
     assert!(
         said("observed", "agent ran `echo side-$((40+2))` in pane "),
