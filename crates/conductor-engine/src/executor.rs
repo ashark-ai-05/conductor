@@ -58,6 +58,8 @@ pub struct AgentRun {
     pub final_text: String,
     pub reason: Option<String>,
     pub duration_ms: u64,
+    /// herdr's readings (pane opened, agent idle, waiting for you): recorded as `inferred`.
+    pub inferred: Vec<String>,
 }
 
 pub trait Executor: Send + Sync {

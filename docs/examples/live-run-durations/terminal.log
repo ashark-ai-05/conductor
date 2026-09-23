@@ -1,0 +1,59 @@
+conductor · .conductor/workflows/build.yaml at HEAD
+
+  15:05:10             witnessed  run started: duration-parser at 68b80e2fd386
+  15:05:10             witnessed  worktree on branch conductor/0MUE8IKOXFM
+  15:05:10  tests      witnessed  attempt 1: first try with claude
+  15:05:51  tests      observed   Bash find . -maxdepth 3 -not -path './target*' -not -path './.git*' | sort
+  15:05:51  tests      observed   Read /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM/Cargo.toml
+  15:05:51  tests      observed   Read /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM/src/lib.rs
+  15:05:51  tests      observed   Read /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM/prompts/tests.md
+  15:05:51  tests      observed   Read /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM/prompts/implement.md
+  15:05:51  tests      observed   Write /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM/tests/duration.rs
+  15:05:51  tests      observed   Bash cargo test 2>&1 | tail -80
+  15:05:51  tests      observed   Bash git status --porcelain
+  15:05:51  tests      measured   243496 tokens · $0.14
+  15:05:51  tests      witnessed  scope failed: Cargo.lock is outside what this stage may change
+  15:05:51  tests      witnessed  attempt 2: in-context retry with claude
+  15:06:05  tests      observed   Bash cat .gitignore 2>/dev/null; echo "---"; git status --porcelain; echo "---"; git check-ignore -v Cargo.lock 2>&1
+  15:06:05  tests      observed   Bash cat .gitignore 2>/dev/null; echo "---status---"; git status --porcelain
+  15:06:05  tests      observed   Bash rm -f Cargo.lock && git status --porcelain
+  15:06:05  tests      observed   Bash cargo test --no-fail-fast 2>&1 | tail -15
+  15:06:05  tests      observed   Bash rm -f Cargo.lock && git status --porcelain
+  15:06:05  tests      measured   267964 tokens · $0.21
+  15:06:05  tests      witnessed  scope passed: 1 file(s) changed, all within scope
+  15:06:05  tests      witnessed  command_assert passed: 0 passed, 36 failed; every assertion held [stdout sha256:bb49d1595c1866f8e6902ce59bf5a4e4f9f7b664e3b80ea1f863284182bb9f2c]
+  15:06:05  tests      witnessed  stage passed on attempt 2; committed 4fef5330b699
+  15:06:05  implement  witnessed  attempt 1: first try with claude
+  15:06:27  implement  observed   Bash cat tests/duration.rs && echo --- && cat src/lib.rs && echo --- && cat Cargo.toml
+  15:06:27  implement  observed   Edit /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM/src/lib.rs
+  15:06:27  implement  observed   Bash cargo test 2>&1 | tail -60
+  15:06:27  implement  measured   160730 tokens · $0.09
+  15:06:27  implement  witnessed  scope passed: 1 file(s) changed, all within scope
+  15:06:27  implement  witnessed  command_assert passed: 36 passed, 0 failed; every assertion held on all 2 runs [stdout sha256:f84d38ab9026fcebdde94f783d9a87a35379b450b5fb6e7b029ccaabd178ee93, sha256:f4e2827a2570439b2bc6a3748f2cd1d3bb96d3cc6ac5fd481b902efa5b72cad7]
+  15:06:54  implement  witnessed  mutation passed: caught 20 of 20 injected bugs · 1.00, needs 0.60 [stdout sha256:2dd5f56bc892fe6ff89d1a9436264d743e67cd68f78a16593770ec0188bb6631]
+  15:06:54  implement  witnessed  stage passed on attempt 1; committed 97508fe72e0e
+  15:06:54             witnessed  run passed in 103s
+  15:06:54             witnessed  record anchored in commit 46cd37077eef88589102a01662fe6b224dd03167
+
+PASSED  Parse durations · 0MUE8IKOXFM
+
+What was proven
+  ✓  Only allowed files changed (tests)                   1 file(s) changed, all within scope
+  ✓  Tests failed before the change, for the right reason 0 passed, 36 failed; every assertion held
+  ✓  Only allowed files changed (implement)               1 file(s) changed, all within scope
+  ✓  Tests pass after the change, on every run            36 passed, 0 failed; every assertion held on all 2 runs
+  ✓  Tests catch injected bugs                            caught 20 of 20 injected bugs · 1.00, needs 0.60
+
+Not checked
+  !  the agent could read the whole machine: no sandbox
+
+How it ran
+  stages         tests · claude (2 tries) → implement · claude
+  where          headless · worktree branch conductor/0MUE8IKOXFM
+  agent actions  16 tool calls observed · 19 turns
+  tokens         672190 measured · $0.44
+  wall clock     1m43s
+  record         chain sha256:b1abfcd940aad7f5873bd3aed3f4d2d991f6aa1ef438cdb540fa199c1db88a66 · anchored in 46cd37077eef
+
+  worktree  /root/.local/share/conductor/worktrees/live-demo/0MUE8IKOXFM
+  branch    conductor/0MUE8IKOXFM

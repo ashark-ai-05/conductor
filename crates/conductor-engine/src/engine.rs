@@ -3,6 +3,7 @@
 //! the agents themselves.
 
 use crate::executor::{self, AgentRun, Brief};
+use crate::herdr_exec::PaneOutcome;
 use crate::receipt::{self, StageRecord};
 use crate::store::{Recorder, RunDir, new_run_id};
 use crate::worktree;
@@ -20,6 +21,8 @@ pub enum EngineError {
     Git(#[from] worktree::GitError),
     #[error("could not write the run record: {0}")]
     Io(#[from] std::io::Error),
+    #[error("herdr is not usable: {0}")]
+    Herdr(String),
     #[error("{path} at {base} is not a valid workflow: {why}")]
     Invalid {
         path: String,
@@ -39,6 +42,15 @@ pub struct Options {
     pub watcher: Option<Sender<Event>>,
     /// Where worktrees go; defaults to [`worktree::conductor_home`].
     pub home: Option<PathBuf>,
+    pub mode: Mode,
+}
+
+/// Where agents run. The workflow and its receipt are the same either way.
+pub enum Mode {
+    /// No panes: CI, overnight, batch.
+    Headless,
+    /// A herdr tab per run, a pane per stage.
+    Herdr(conductor_herdr::Herdr),
 }
 
 #[derive(Debug)]
@@ -215,6 +227,9 @@ fn feedback(r: &GateResult) -> String {
 }
 
 fn record_agent(rec: &mut Recorder, stage: &str, a: &AgentRun) -> std::io::Result<()> {
+    for n in &a.inferred {
+        rec.record(Source::Inferred, Some(stage), n)?;
+    }
     for c in &a.tool_calls {
         let what = match &c.target {
             Some(t) => format!("{} {t}", c.tool),
@@ -245,7 +260,7 @@ fn record_agent(rec: &mut Recorder, stage: &str, a: &AgentRun) -> std::io::Resul
     Ok(())
 }
 
-pub fn run(opts: Options) -> Result<Outcome, EngineError> {
+pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let started = Instant::now();
     let base = worktree::resolve(&opts.repo, &opts.base)?;
     let text = worktree::show(&opts.repo, &base, &opts.workflow)?;
@@ -285,6 +300,39 @@ pub fn run(opts: Options) -> Result<Outcome, EngineError> {
         None,
         format!("worktree on branch {branch}"),
     )?;
+    let herdr_run = match std::mem::replace(&mut opts.mode, Mode::Headless) {
+        Mode::Headless => None,
+        Mode::Herdr(h) => {
+            let hr = crate::herdr_exec::HerdrRun::new(h, &run_id);
+            match hr
+                .herdr
+                .check_protocol()
+                .and_then(|p| hr.open_tab(&wt).map(|t| (p, t)))
+            {
+                Ok((p, t)) => {
+                    rec.record(
+                        Source::Witnessed,
+                        None,
+                        format!("herdr protocol {p}; run tab {}", t.tab_id),
+                    )?;
+                    Some(hr)
+                }
+                Err(e) => {
+                    rec.record(
+                        Source::Witnessed,
+                        None,
+                        format!("halted: herdr is not usable: {e}"),
+                    )?;
+                    return Err(EngineError::Herdr(e.to_string()));
+                }
+            }
+        }
+    };
+    let where_ran = if herdr_run.is_some() {
+        "herdr"
+    } else {
+        "headless"
+    };
 
     let protected = policy_protected(&opts.repo, &base);
     let stage_timeout = Duration::from_secs(wf.budget.max_stage_wall_clock_sec.unwrap_or(900));
@@ -312,7 +360,14 @@ pub fn run(opts: Options) -> Result<Outcome, EngineError> {
             None => format!("You are the `{}` stage of a conductor workflow.", stage.id),
         };
         let stage_base = worktree::head(&wt)?;
-        let exec = match executor::for_agent(&stage.agent.kind) {
+        let exec: Result<Box<dyn executor::Executor + '_>, String> = match &herdr_run {
+            Some(hr) => Ok(Box::new(crate::herdr_exec::HerdrExecutor {
+                run: hr,
+                kind: stage.agent.kind.clone(),
+            })),
+            None => executor::for_agent(&stage.agent.kind),
+        };
+        let exec = match exec {
             Ok(e) => e,
             Err(why) => {
                 rec.record(Source::Witnessed, Some(&stage.id), format!("halted: {why}"))?;
@@ -518,6 +573,16 @@ pub fn run(opts: Options) -> Result<Outcome, EngineError> {
 
         stage_rec.verdict = stage_verdict;
         records.push(stage_rec);
+        if let Some(hr) = &herdr_run {
+            let passed = stage_verdict == Verdict::Passed;
+            let what = match hr.stage_done(&stage.id, passed, wf.herdr.close_passed_panes) {
+                PaneOutcome::Closed => "closed the stage's pane",
+                PaneOutcome::Kept => "kept the stage's pane for the next stage",
+                PaneOutcome::LeftOpen => "left the stage's pane open for you",
+                PaneOutcome::CloseFailed => "herdr would not close the stage's pane",
+            };
+            rec.record(Source::Witnessed, Some(&stage.id), what)?;
+        }
         if stage_verdict != Verdict::Passed {
             run_verdict = stage_verdict;
             rec.record(
@@ -555,6 +620,7 @@ pub fn run(opts: Options) -> Result<Outcome, EngineError> {
         &rec,
         &anchor,
         &branch,
+        where_ran,
         started.elapsed(),
     );
     dir.write_json(&dir.receipt(), &receipt)?;

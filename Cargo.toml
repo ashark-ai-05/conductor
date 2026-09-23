@@ -44,6 +44,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 conductor-engine.workspace = true
+conductor-herdr.workspace = true
 conductor-model.workspace = true
 conductor-tui.workspace = true
 

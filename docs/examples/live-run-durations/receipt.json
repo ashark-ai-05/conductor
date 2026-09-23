@@ -1,0 +1,74 @@
+{
+  "run_id": "0MUE8IKOXFM",
+  "work": "Parse durations",
+  "kind": "build",
+  "checks": [
+    {
+      "claim": "Only allowed files changed (tests)",
+      "verdict": "passed",
+      "detail": "1 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests failed before the change, for the right reason",
+      "verdict": "passed",
+      "detail": "0 passed, 36 failed; every assertion held",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Only allowed files changed (implement)",
+      "verdict": "passed",
+      "detail": "1 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests pass after the change, on every run",
+      "verdict": "passed",
+      "detail": "36 passed, 0 failed; every assertion held on all 2 runs",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests catch injected bugs",
+      "verdict": "passed",
+      "detail": "caught 20 of 20 injected bugs · 1.00, needs 0.60",
+      "source": "witnessed"
+    }
+  ],
+  "survivors": [],
+  "not_checked": [
+    "the agent could read the whole machine: no sandbox"
+  ],
+  "how": [
+    [
+      "stages",
+      "tests · claude (2 tries) → implement · claude"
+    ],
+    [
+      "where",
+      "headless · worktree branch conductor/0MUE8IKOXFM"
+    ],
+    [
+      "agent actions",
+      "16 tool calls observed · 19 turns"
+    ],
+    [
+      "tokens",
+      "672190 measured · $0.44"
+    ],
+    [
+      "wall clock",
+      "1m43s"
+    ]
+  ],
+  "integrity": {
+    "chain_head": "sha256:b1abfcd940aad7f5873bd3aed3f4d2d991f6aa1ef438cdb540fa199c1db88a66",
+    "anchored_in": "46cd37077eef",
+    "signed": false,
+    "reproduces": true,
+    "trace_id": null
+  },
+  "also_at": [
+    ".conductor/runs/0MUE8IKOXFM/receipt.json",
+    "conductor receipt 0MUE8IKOXFM"
+  ]
+}

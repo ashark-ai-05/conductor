@@ -1,7 +1,7 @@
 //! `conductor`: the command line.
 
 use anyhow::{Context, Result, bail};
-use conductor_engine::{Options, list_runs, read_receipt, verify};
+use conductor_engine::{Mode, Options, list_runs, read_receipt, verify};
 use conductor_model::{Event, Receipt, Verdict, Workflow};
 use conductor_tui::{app::App, theme::Theme};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,9 @@ conductor — agentic software work with receipts
 
 usage:
   conductor run <workflow.yaml> (--spec <file> | -m <text>) [--base <rev>]
-                                     run a workflow headless and write its receipt
+                [--executor herdr|headless]
+                                     run a workflow and write its receipt; in herdr
+                                     each run gets a tab and each stage a pane
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
   conductor ui [--demo] [--light]    open the terminal UI over this repository's runs
@@ -72,6 +74,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
     let mut workflow = None;
     let mut task = None;
     let mut base = "HEAD".to_string();
+    let mut executor: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -81,6 +84,13 @@ fn run(args: &[String]) -> Result<ExitCode> {
             }
             "-m" => task = Some(it.next().context("-m needs text")?.clone()),
             "--base" => base = it.next().context("--base needs a revision")?.clone(),
+            "--executor" => {
+                executor = Some(
+                    it.next()
+                        .context("--executor needs herdr or headless")?
+                        .clone(),
+                )
+            }
             other if other.starts_with('-') => {
                 bail!("unknown option `{other}` for `conductor run`")
             }
@@ -95,6 +105,17 @@ fn run(args: &[String]) -> Result<ExitCode> {
     };
     let repo = repo_root()?;
     let workflow = relative_to(&repo, &workflow)?;
+
+    // Inside a herdr pane and not in CI, run in herdr; otherwise headless.
+    let in_herdr =
+        std::env::var("HERDR_ENV").as_deref() == Ok("1") && std::env::var_os("CI").is_none();
+    let mode = match executor.as_deref() {
+        Some("herdr") => Mode::Herdr(herdr_handle()),
+        Some("headless") => Mode::Headless,
+        Some(other) => bail!("unknown executor `{other}`; use herdr or headless"),
+        None if in_herdr => Mode::Herdr(herdr_handle()),
+        None => Mode::Headless,
+    };
 
     let (tx, rx) = std::sync::mpsc::channel::<Event>();
     let printer = std::thread::spawn(move || {
@@ -120,6 +141,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
         task,
         watcher: Some(tx),
         home: None,
+        mode,
     });
     let _ = printer.join();
     let outcome = outcome?;
@@ -135,6 +157,17 @@ fn run(args: &[String]) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// The herdr to drive: `$CONDUCTOR_HERDR_BIN` (default `herdr`), in the session this
+/// process runs in, or `$CONDUCTOR_HERDR_SESSION` when set.
+fn herdr_handle() -> conductor_herdr::Herdr {
+    let bin = std::env::var("CONDUCTOR_HERDR_BIN").unwrap_or_else(|_| "herdr".into());
+    let target = match std::env::var("CONDUCTOR_HERDR_SESSION") {
+        Ok(s) if !s.is_empty() => conductor_herdr::Target::Session(s),
+        _ => conductor_herdr::Target::Current,
+    };
+    conductor_herdr::Herdr::with(bin, target)
 }
 
 fn print_receipt(r: &Receipt) {

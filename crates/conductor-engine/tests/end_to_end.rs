@@ -107,6 +107,7 @@ fn options(dir: &Path) -> Options {
         task: "# Clamp values above 10\n\nclamp(x) returns 10 for anything above 10.".into(),
         watcher: None,
         home: Some(dir.join(".test-conductor-home")),
+        mode: conductor_engine::Mode::Headless,
     }
 }
 
@@ -236,4 +237,74 @@ fn a_workflow_is_read_from_the_base_not_the_working_tree() {
     fs::write(&wf, "not: a workflow").unwrap();
     let out = run(options(d.path())).expect("the committed workflow is used");
     assert_eq!(out.verdict, Verdict::Passed);
+}
+
+/// The same workflow in real herdr panes. Runs only when `CONDUCTOR_HERDR_BIN` is set.
+#[test]
+fn a_run_in_herdr_gets_a_tab_and_closes_each_passed_stages_pane() {
+    let Ok(bin) = std::env::var("CONDUCTOR_HERDR_BIN") else {
+        eprintln!("CONDUCTOR_HERDR_BIN not set; skipping");
+        return;
+    };
+    let session = format!("conductor-e2e-{}", std::process::id());
+    let mut server = Command::new(&bin)
+        .args(["--session", &session, "server"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline
+        && !Command::new(&bin)
+            .args(["--session", &session, "status", "--json"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    let d = repo(WRONG_THEN_RIGHT);
+    let mut opts = options(d.path());
+    opts.mode = conductor_engine::Mode::Herdr(conductor_herdr::Herdr::with(
+        &bin,
+        conductor_herdr::Target::Session(session.clone()),
+    ));
+    let out = run(opts);
+
+    let _ = Command::new(&bin)
+        .args(["--session", &session, "server", "stop"])
+        .output();
+    let _ = server.wait();
+
+    let out = out.expect("run completes");
+    assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    let events = out.dir.read_events().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.what.starts_with("herdr protocol 22; run tab")),
+        "{events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.source == Source::Inferred && e.what.starts_with("stage pane"))
+    );
+    // Every passed stage's pane is accounted for; the tab's last pane is kept, never
+    // closed, because closing it would close the run's tab.
+    let panes: Vec<&str> = events
+        .iter()
+        .filter(|e| e.what.contains("the stage's pane"))
+        .map(|e| e.what.as_str())
+        .collect();
+    assert_eq!(panes.len(), 3, "{events:#?}");
+    assert!(panes.iter().all(
+        |w| *w == "kept the stage's pane for the next stage" || *w == "closed the stage's pane"
+    ));
+    assert!(
+        out.receipt
+            .how
+            .iter()
+            .any(|(k, v)| k == "where" && v.starts_with("herdr"))
+    );
 }

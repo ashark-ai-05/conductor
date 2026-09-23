@@ -5,11 +5,13 @@
 
 pub mod engine;
 pub mod executor;
+pub mod herdr_exec;
 pub mod receipt;
 pub mod store;
+pub mod transcript;
 pub mod worktree;
 
-pub use engine::{EngineError, Options, Outcome, run};
+pub use engine::{EngineError, Mode, Options, Outcome, run};
 
 use conductor_model::{Chain, Receipt, Verdict};
 use std::path::Path;

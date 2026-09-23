@@ -1,0 +1,41 @@
+id: duration-parser
+version: 1
+kind: build
+defaults:
+  retries: { max: 2, ladder: [in_context, fresh] }
+budget:
+  max_stage_wall_clock_sec: 420
+  max_mutation_wall_clock_sec: 300
+stages:
+  - id: tests
+    agent:
+      kind: claude
+      allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)"]
+    prompt_file: prompts/tests.md
+    scope: { write: ["tests/**"] }
+    outputs:
+      - { id: tests, path: tests/duration.rs }
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["cargo", "test", "--no-fail-fast", "--message-format", "json"]
+        parser: cargo_json
+        assert: ["compiled == true", "tests_failed > 0", "failures.kind all != 'trivial'"]
+
+  - id: implement
+    depends_on: [tests]
+    agent:
+      kind: claude
+      allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)"]
+    prompt_file: prompts/implement.md
+    scope:
+      write: ["src/**"]
+      frozen: ["{{stages.tests.outputs.tests.path}}"]
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["cargo", "test", "--message-format", "json"]
+        parser: cargo_json
+        reruns: 1
+        assert: ["tests_failed == 0", "tests_run > 0"]
+      - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.6 }

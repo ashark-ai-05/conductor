@@ -142,6 +142,7 @@ pub fn build(
     rec: &Recorder,
     anchor: &str,
     branch: &str,
+    where_ran: &str,
     elapsed: Duration,
 ) -> Receipt {
     let mut checks = Vec::new();
@@ -238,7 +239,7 @@ pub fn build(
         ("stages".to_string(), chain.join(" → ")),
         (
             "where".to_string(),
-            format!("headless · worktree branch {branch}"),
+            format!("{where_ran} · worktree branch {branch}"),
         ),
         (
             "agent actions".to_string(),

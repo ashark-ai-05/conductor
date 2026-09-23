@@ -158,6 +158,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "conductor-engine",
+ "conductor-herdr",
  "conductor-model",
  "conductor-tui",
 ]
@@ -182,6 +183,7 @@ name = "conductor-engine"
 version = "0.1.0"
 dependencies = [
  "conductor-checks",
+ "conductor-herdr",
  "conductor-model",
  "serde",
  "serde_json",
