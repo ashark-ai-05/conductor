@@ -241,6 +241,12 @@ fn feedback(r: &GateResult) -> String {
         }
     }
     if let Some(t) = &r.tests {
+        if !t.compile_messages.is_empty() {
+            f.push_str("The build failed:\n");
+            for m in &t.compile_messages {
+                f.push_str(&format!("- {m}\n"));
+            }
+        }
         for c in t.tests.iter().filter(|c| c.failure.is_some()).take(8) {
             f.push_str(&format!(
                 "- test {} failed: {}\n",

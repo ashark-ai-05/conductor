@@ -69,6 +69,9 @@ pub struct TestReport {
     /// `None` when cargo never said whether the build finished.
     pub compiled: Option<bool>,
     pub compile_errors: usize,
+    /// The compiler's first few error messages, one line each, for the agent's next try.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub compile_messages: Vec<String>,
     pub tests: Vec<TestCase>,
 }
 
@@ -103,6 +106,23 @@ pub fn parse(stdout: &str) -> TestReport {
                             == Some("error") =>
                     {
                         report.compile_errors += 1;
+                        if report.compile_messages.len() < 5 {
+                            let msg = v
+                                .pointer("/message/message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("");
+                            let at = v
+                                .pointer("/message/spans/0")
+                                .and_then(|s| {
+                                    Some(format!(
+                                        "{}:{}: ",
+                                        s.get("file_name")?.as_str()?,
+                                        s.get("line_start")?.as_u64()?
+                                    ))
+                                })
+                                .unwrap_or_default();
+                            report.compile_messages.push(format!("{at}{msg}"));
+                        }
                     }
                     _ => {}
                 }
@@ -240,6 +260,13 @@ mod tests {
         assert_eq!(r.compiled, Some(false));
         assert!(r.compile_errors >= 1);
         assert!(r.tests.is_empty());
+        // Where and what, so the agent's next try knows what to fix.
+        assert!(!r.compile_messages.is_empty());
+        assert!(
+            r.compile_messages[0].contains(".rs:"),
+            "{:?}",
+            r.compile_messages
+        );
     }
 
     #[test]

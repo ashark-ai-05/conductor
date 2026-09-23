@@ -30,15 +30,21 @@ stages:
       kind: claude
       allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)"]
     prompt_file: .conductor/prompts/tests.md
-    scope: { write: ["tests/**"] }
+    # Tests, plus `todo!()` stubs in src/ so tests of new code compile.
+    scope: { write: ["tests/**", "src/**"] }
     gates:
       - { type: scope }
-      # The new tests must compile and fail for the right reason: an assertion, not a
-      # missing function or a trivially false test.
+      # The new tests must compile, and every one of them must fail for the right reason
+      # (an assertion or a `todo!()`, not a trivially false test). A stub that quietly
+      # implements the work would make some pass, and fail this check.
       - type: command_assert
         command: ["cargo", "test", "--no-fail-fast", "--message-format", "json"]
         parser: cargo_json
-        assert: ["compiled == true", "tests_failed > 0", "failures.kind all != 'trivial'"]
+        assert:
+          - "compiled == true"
+          - "tests_new > 0"
+          - "tests_failed == tests_new"
+          - "failures.kind all != 'trivial'"
 
   - id: implement
     depends_on: [tests]
@@ -62,9 +68,12 @@ stages:
 
 const TESTS_PROMPT: &str = "\
 You write tests only. Write Rust integration tests under tests/ for the work described
-below. Cover normal cases, boundaries and malformed input. Do not change anything under
-src/ and do not implement anything. Run `cargo test` to confirm the tests compile and fail
-because the work is not done yet.
+below. Cover normal cases, boundaries and malformed input.
+
+If the tests call something that does not exist yet, add it under src/ with its real
+signature and a body of `todo!()`, and export it, so the tests compile. Nothing more: do
+not implement anything. Every test you add must fail. Run `cargo test` to confirm they
+compile and fail.
 ";
 
 const IMPLEMENT_PROMPT: &str = "\

@@ -125,3 +125,70 @@ fn doctor_insists_workflows_are_committed() {
     assert!(after.contains("✓  run records"), "{after}");
     assert!(after.contains("!  telemetry"), "{after}");
 }
+
+/// The `init` workflow with scripted agents in place of Claude, and without the mutation
+/// check (which needs cargo-mutants): the red-first rules themselves, run for real.
+fn scripted_init(tests_script: &str) -> (tempfile::TempDir, Output) {
+    let d = repo(true);
+    fs::create_dir_all(d.path().join("src")).unwrap();
+    fs::write(d.path().join("src/lib.rs"), "").unwrap();
+    assert!(conductor(d.path(), &["init"]).status.success());
+    let wf = d.path().join(".conductor/workflows/build.yaml");
+    let text = fs::read_to_string(&wf).unwrap();
+    let agent = |prompt: &str, script: &str| {
+        (
+            format!(
+                "    agent:\n      kind: claude\n      allowed_tools: [\"Bash(cargo test:*)\", \"Bash(cargo build:*)\"]\n    prompt_file: .conductor/prompts/{prompt}.md\n"
+            ),
+            format!("    agent: {{ kind: script, command: [\"sh\", \"-c\", {script:?}] }}\n"),
+        )
+    };
+    let implement = "echo 'pub fn double(x: i32) -> i32 { x * 2 }' > src/lib.rs";
+    let mut text = text;
+    for (from, to) in [agent("tests", tests_script), agent("implement", implement)] {
+        assert!(text.contains(&from));
+        text = text.replace(&from, &to);
+    }
+    let text: String = text
+        .lines()
+        .filter(|l| !l.contains("type: mutation"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    fs::write(&wf, text).unwrap();
+    git(d.path(), &["add", "."]);
+    git(d.path(), &["commit", "-qm", "init"]);
+    let out = Command::new(env!("CARGO_BIN_EXE_conductor"))
+        .args([
+            "run",
+            ".conductor/workflows/build.yaml",
+            "--spec",
+            ".conductor/task.md",
+            "--executor",
+            "headless",
+        ])
+        .current_dir(d.path())
+        .env("CONDUCTOR_HOME", d.path().join(".home"))
+        .output()
+        .unwrap();
+    (d, out)
+}
+
+const TESTS: &str = "mkdir -p tests && printf 'use demo::double;\\n#[test] fn twice() { assert_eq!(double(2), 4); }\\n#[test] fn negative() { assert_eq!(double(-3), -6); }\\n' > tests/double.rs";
+
+#[test]
+fn the_init_workflow_lets_tests_stub_new_code_and_passes_an_honest_run() {
+    let stub = format!("{TESTS}; echo 'pub fn double(_x: i32) -> i32 {{ todo!() }}' > src/lib.rs");
+    let (_d, out) = scripted_init(&stub);
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("PASSED"), "{t}");
+}
+
+#[test]
+fn the_init_workflow_stops_a_tests_agent_that_implements_the_work() {
+    let cheat = format!("{TESTS}; echo 'pub fn double(x: i32) -> i32 {{ x * 2 }}' > src/lib.rs");
+    let (_d, out) = scripted_init(&cheat);
+    let t = text(&out);
+    assert!(!out.status.success(), "{t}");
+    assert!(t.contains("did not hold: tests_failed == tests_new"), "{t}");
+}

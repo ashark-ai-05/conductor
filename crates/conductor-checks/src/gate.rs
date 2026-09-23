@@ -320,11 +320,15 @@ fn command_assert(
         .tests
         .as_ref()
         .map(|t| {
-            format!(
-                "{} passed, {} failed",
-                t.count(Outcome::Passed),
-                t.count(Outcome::Failed)
-            )
+            if t.compiled == Some(false) {
+                format!("does not compile ({} errors)", t.compile_errors)
+            } else {
+                format!(
+                    "{} passed, {} failed",
+                    t.count(Outcome::Passed),
+                    t.count(Outcome::Failed)
+                )
+            }
         })
         .unwrap_or_default();
     let times = if runs > 1 {
