@@ -6,7 +6,7 @@ version: 1
 kind: build
 requires:
   conductor: ">=0.1"
-  herdr_protocol: "20"          # checked only when running in herdr
+  herdr_protocol: "22"          # checked only when running in herdr
 
 runtime:
   artifact_root: ".conductor/{{run_id}}"

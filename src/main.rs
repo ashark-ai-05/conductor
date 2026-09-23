@@ -7,10 +7,15 @@ use conductor_tui::{app::App, theme::Theme};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod setup;
+
 const USAGE: &str = "\
 conductor — agentic software work with receipts
 
 usage:
+  conductor init                     set up this repository: a starter workflow, prompts,
+                                     policy and a task file
+  conductor doctor                   check this repository and machine are ready to run
   conductor run <workflow.yaml> (--spec <file> | -m <text>) [--base <rev>]
                 [--executor herdr|headless]
                                      run a workflow and write its receipt; in herdr
@@ -32,6 +37,21 @@ The workflow is read from the base commit (HEAD by default), never from your
 working tree, and the run happens in its own git worktree and branch.";
 
 fn main() -> ExitCode {
+    // `conductor trace | head` closes the pipe early: that's the reader being done, not a
+    // crash, so leave quietly instead of printing a panic.
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if msg.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        default(info);
+    }));
     match real_main() {
         Ok(code) => code,
         Err(e) => {
@@ -45,6 +65,8 @@ fn real_main() -> Result<ExitCode> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
+        Some("init") => setup::init(&repo_root()?),
+        Some("doctor") => setup::doctor(&repo_root()?, herdr_handle()),
         Some("receipt") => receipt(&args[1..]),
         Some("verify") => verify_cmd(&args[1..]),
         Some("trace") => trace_cmd(&args[1..]),

@@ -71,7 +71,12 @@ pub struct Outcome {
 }
 
 /// Paths an agent may never change, whatever the workflow says: conductor's own config.
-const ALWAYS_PROTECTED: &[&str] = &[".conductor/*.yaml", ".conductor/workflows/**", ".github/**"];
+const ALWAYS_PROTECTED: &[&str] = &[
+    ".conductor/*.yaml",
+    ".conductor/workflows/**",
+    ".conductor/prompts/**",
+    ".github/**",
+];
 
 /// The repository policy at the base: (protected paths, files tooling writes).
 fn policy_paths(repo: &Path, base: &str) -> (Vec<String>, Vec<String>) {
