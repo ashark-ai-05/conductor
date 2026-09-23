@@ -78,7 +78,7 @@ impl Theme {
         self.fg(match v {
             Verdict::Passed => self.pass,
             Verdict::Failed => self.fail,
-            Verdict::Flaky | Verdict::Overridden => self.warn,
+            Verdict::Flaky | Verdict::Overridden | Verdict::Unwitnessed => self.warn,
             Verdict::Running => self.run,
             Verdict::Blocked => self.blocked,
             Verdict::Pending => self.faint,

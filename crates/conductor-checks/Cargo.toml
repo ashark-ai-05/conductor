@@ -1,0 +1,22 @@
+[package]
+name = "conductor-checks"
+version.workspace = true
+edition.workspace = true
+description = "Checks conductor runs in its own process: commands, scope, test results, mutation scores"
+publish = false
+
+[dependencies]
+conductor-model.workspace = true
+globset.workspace = true
+hex.workspace = true
+nix = { version = "0.29", features = ["process", "signal"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

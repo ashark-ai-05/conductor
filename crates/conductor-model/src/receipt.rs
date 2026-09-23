@@ -22,6 +22,8 @@ pub enum Verdict {
     /// A failed check a person accepted with a recorded reason.
     Overridden,
     Pending,
+    /// The check could not be carried out, so nothing was proven either way.
+    Unwitnessed,
 }
 
 impl Verdict {
@@ -35,6 +37,7 @@ impl Verdict {
             Verdict::Blocked => "◆",
             Verdict::Overridden => "▲",
             Verdict::Pending => "○",
+            Verdict::Unwitnessed => "?",
         }
     }
 
@@ -47,6 +50,7 @@ impl Verdict {
             Verdict::Blocked => "needs you",
             Verdict::Overridden => "overridden",
             Verdict::Pending => "not started",
+            Verdict::Unwitnessed => "not witnessed",
         }
     }
 }
@@ -107,6 +111,7 @@ impl Receipt {
             match c.verdict {
                 Verdict::Passed if !c.source.is_proof() => return Verdict::Failed,
                 Verdict::Failed => return Verdict::Failed,
+                Verdict::Unwitnessed => return Verdict::Unwitnessed,
                 Verdict::Blocked => return Verdict::Blocked,
                 Verdict::Flaky => return Verdict::Flaky,
                 Verdict::Running | Verdict::Pending => return Verdict::Running,
@@ -164,7 +169,11 @@ impl RunSummary {
     pub fn is_finished(&self) -> bool {
         matches!(
             self.status,
-            Verdict::Passed | Verdict::Failed | Verdict::Flaky | Verdict::Overridden
+            Verdict::Passed
+                | Verdict::Failed
+                | Verdict::Flaky
+                | Verdict::Overridden
+                | Verdict::Unwitnessed
         )
     }
 }
@@ -245,6 +254,15 @@ mod tests {
             row(Verdict::Blocked, Source::Human),
         ]);
         assert_eq!(r.verdict(), Verdict::Failed);
+    }
+
+    #[test]
+    fn a_check_that_never_ran_keeps_the_run_from_passing() {
+        let r = receipt(vec![
+            row(Verdict::Passed, Source::Witnessed),
+            row(Verdict::Unwitnessed, Source::Witnessed),
+        ]);
+        assert_eq!(r.verdict(), Verdict::Unwitnessed);
     }
 
     #[test]
