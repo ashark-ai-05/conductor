@@ -17,7 +17,9 @@ usage:
                                      each run gets a tab and each stage a pane
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
-  conductor ui [--demo] [--light]    open the terminal UI over this repository's runs
+  conductor ui [--run <id>] [--demo] [--light]
+                                     open the terminal UI over this repository's runs,
+                                     including ones in progress
   conductor validate <workflow.yaml> check a workflow before running it
   conductor pane split [--from <pane>] [--down] | run <pane> <command> |
                  read <pane> [--lines N] | close <pane> | list
@@ -252,14 +254,35 @@ fn verify_cmd(args: &[String]) -> Result<ExitCode> {
     })
 }
 
+/// The repository's runs, read fresh on every UI tick.
+struct RepoRuns(PathBuf);
+
+impl conductor_tui::app::RunSource for RepoRuns {
+    fn receipts(&self) -> Vec<Receipt> {
+        list_runs(&self.0)
+            .iter()
+            .filter_map(|id| read_receipt(&self.0, id).ok())
+            .collect()
+    }
+    fn running(&self) -> Vec<conductor_model::view::LiveRun> {
+        conductor_engine::live::running(&self.0)
+    }
+    fn live(&self, run_id: &str) -> Option<conductor_model::view::LiveRun> {
+        conductor_engine::live::read(&self.0, run_id)
+    }
+}
+
 fn ui(args: &[String]) -> Result<ExitCode> {
     let mut demo = false;
     let mut theme = Theme::DARK;
-    for a in args {
+    let mut run_id: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         match a.as_str() {
             "--demo" => demo = true,
             "--light" => theme = Theme::LIGHT,
             "--dark" => theme = Theme::DARK,
+            "--run" => run_id = Some(it.next().context("--run needs a run id")?.clone()),
             other => bail!("unknown option `{other}` for `conductor ui`"),
         }
     }
@@ -267,16 +290,26 @@ fn ui(args: &[String]) -> Result<ExitCode> {
         App::demo()
     } else {
         let repo = repo_root()?;
-        let receipts: Vec<Receipt> = list_runs(&repo)
-            .iter()
-            .filter_map(|id| read_receipt(&repo, id).ok())
-            .collect();
-        if receipts.is_empty() {
+        let src = RepoRuns(repo.clone());
+        use conductor_tui::app::RunSource;
+        if src.receipts().is_empty() && src.running().is_empty() && run_id.is_none() {
             bail!(
                 "no runs recorded in this repository yet; start one with `conductor run`, or try `conductor ui --demo`"
             );
         }
-        App::from_receipts(receipts)
+        let live = match &run_id {
+            Some(id) => Some(
+                src.live(id)
+                    .with_context(|| format!("no run `{id}` in this repository"))?,
+            ),
+            None => None,
+        };
+        let mut app = App::from_source(Box::new(src));
+        if let Some(l) = live {
+            app.live = l;
+            app.go(conductor_tui::app::Screen::Live);
+        }
+        app
     };
     conductor_tui::run(app, theme)?;
     Ok(ExitCode::SUCCESS)

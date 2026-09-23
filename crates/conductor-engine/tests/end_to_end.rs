@@ -230,6 +230,30 @@ fn tampering_with_the_stored_record_is_caught() {
 }
 
 #[test]
+fn the_live_view_ends_with_the_runs_verdict_and_every_stage() {
+    let d = repo(WRONG_THEN_RIGHT);
+    let out = run(options(d.path())).expect("run completes");
+    let live = conductor_engine::live::read(d.path(), &out.receipt.run_id).expect("live.json");
+    assert_eq!(live.ended, Some(Verdict::Passed));
+    assert_eq!(
+        live.stages
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["spec", "tests", "implement"]
+    );
+    assert!(live.stages.iter().all(|s| s.status == Verdict::Passed));
+    assert!(
+        live.stages[2].detail.contains("after 2 tries"),
+        "{:?}",
+        live.stages[2]
+    );
+    assert!(!live.log.is_empty());
+    // A finished run is not listed as running.
+    assert!(conductor_engine::live::running(d.path()).is_empty());
+}
+
+#[test]
 fn a_workflow_is_read_from_the_base_not_the_working_tree() {
     let d = repo(WRONG_THEN_RIGHT);
     // An uncommitted edit that would loosen the rules must have no effect.

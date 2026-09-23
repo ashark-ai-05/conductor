@@ -127,6 +127,8 @@ pub fn live() -> LiveRun {
         note: Some("1st try failed: tests missed 11 injected bugs. The 2nd try starts fresh and gets that list.".into()),
         log: vec![],
         panes: vec![pane("spec", P, false), pane("tests", P, false), pane("implement", R, true)],
+        ended: None,
+        pid: None,
     };
     run.push_log("12:04:13", Source::Observed, "edited src/status.rs");
     run.push_log("12:04:20", Source::Witnessed, "scope passed");

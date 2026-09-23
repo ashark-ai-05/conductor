@@ -3,15 +3,16 @@
 
 use crate::evidence::Source;
 use crate::receipt::Verdict;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageView {
     pub name: String,
     pub status: Verdict,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckView {
     pub name: String,
     pub status: Verdict,
@@ -20,7 +21,7 @@ pub struct CheckView {
     pub progress: Option<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLine {
     pub at: String,
     pub source: Source,
@@ -28,7 +29,7 @@ pub struct LogLine {
 }
 
 /// A herdr pane conductor manages for this run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneView {
     pub stage: String,
     pub status: Verdict,
@@ -37,7 +38,7 @@ pub struct PaneView {
     pub opened_by: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveRun {
     pub run_id: String,
     pub work: String,
@@ -50,12 +51,19 @@ pub struct LiveRun {
     pub note: Option<String>,
     pub log: Vec<LogLine>,
     pub panes: Vec<PaneView>,
+    /// The run's verdict once it has ended; `None` while it runs.
+    #[serde(default)]
+    pub ended: Option<Verdict>,
+    /// The conductor process running it, so a run whose process died isn't shown as running.
+    #[serde(default)]
+    pub pid: Option<u32>,
 }
 
 impl LiveRun {
     /// Every stage has passed.
     pub fn is_done(&self) -> bool {
-        !self.stages.is_empty() && self.stages.iter().all(|s| s.status == Verdict::Passed)
+        self.ended.is_some()
+            || (!self.stages.is_empty() && self.stages.iter().all(|s| s.status == Verdict::Passed))
     }
 
     /// Keeps the evidence feed to its latest lines.

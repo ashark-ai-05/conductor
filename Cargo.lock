@@ -187,6 +187,7 @@ dependencies = [
  "conductor-checks",
  "conductor-herdr",
  "conductor-model",
+ "nix",
  "serde",
  "serde_json",
  "tempfile",

@@ -4,6 +4,7 @@
 
 use crate::executor::{self, AgentRun, Brief};
 use crate::herdr_exec::PaneOutcome;
+use crate::live::Live;
 use crate::receipt::{self, StageRecord};
 use crate::store::{Recorder, RunDir, new_run_id};
 use crate::worktree;
@@ -325,6 +326,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         None,
         format!("worktree on branch {branch}"),
     )?;
+    let mut live = Live::new(&dir, &run_id, &opts.task, &wf, &order(&wf.stages));
+    live.save(&rec);
     let herdr_run = match std::mem::replace(&mut opts.mode, Mode::Headless) {
         Mode::Headless => None,
         Mode::Herdr(h) => {
@@ -343,6 +346,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                         None,
                         format!("herdr protocol {p}; run tab {}", t.tab_id),
                     )?;
+                    live.set_tab(&t.tab_id);
                     Some(hr)
                 }
                 Err(e) => {
@@ -462,6 +466,11 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 Some(&stage.id),
                 format!("attempt {attempt}: {rung_name} with {}", stage.agent.kind),
             )?;
+            live.attempt(stage, attempt, rung_name);
+            if herdr_run.is_some() {
+                live.pane(&stage.id, Verdict::Running, true, "conductor");
+            }
+            live.save(&rec);
 
             let brief = Brief {
                 stage: stage.id.clone(),
@@ -489,6 +498,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 }
                 actions_seen = actions.len();
             }
+            live.save(&rec);
             // A session id inherited from whoever launched conductor is not this agent's.
             let parent = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
             session = agent
@@ -573,6 +583,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     Some(&stage.id),
                     format!("{} {}: {}{hashes}", r.gate, r.verdict.word(), r.detail),
                 )?;
+                live.check(gi, r.verdict, &r.detail);
+                live.save(&rec);
                 let bad = r.verdict != Verdict::Passed;
                 results.push(r);
                 if bad {
@@ -621,6 +633,17 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         }
 
         stage_rec.verdict = stage_verdict;
+        live.stage(
+            &stage.id,
+            stage_verdict,
+            format!(
+                "{} · {} after {} tr{}",
+                stage.agent.kind,
+                stage_verdict.word(),
+                stage_rec.attempts,
+                if stage_rec.attempts == 1 { "y" } else { "ies" }
+            ),
+        );
         records.push(stage_rec);
         if let Some(hr) = &herdr_run {
             let passed = stage_verdict == Verdict::Passed;
@@ -650,7 +673,14 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     rec.record(Source::Witnessed, Some(&stage.id), what)?;
                 }
             }
-            let what = match hr.stage_done(&stage.id, passed, wf.herdr.close_passed_panes) {
+            let outcome = hr.stage_done(&stage.id, passed, wf.herdr.close_passed_panes);
+            live.pane(
+                &stage.id,
+                stage_verdict,
+                matches!(outcome, PaneOutcome::LeftOpen | PaneOutcome::CloseFailed),
+                "conductor",
+            );
+            let what = match outcome {
                 PaneOutcome::Closed => "closed the stage's pane",
                 PaneOutcome::Kept => "kept the stage's pane for the next stage",
                 PaneOutcome::LeftOpen => "left the stage's pane open for you",
@@ -658,6 +688,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
             };
             rec.record(Source::Witnessed, Some(&stage.id), what)?;
         }
+        live.save(&rec);
         if stage_verdict != Verdict::Passed {
             run_verdict = stage_verdict;
             rec.record(
@@ -686,6 +717,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         format!("record anchored in commit {anchor}"),
     )?;
 
+    live.end(run_verdict);
+    live.save(&rec);
     dir.write_json(&dir.gates(), &records)?;
     let receipt = receipt::build(
         &wf,

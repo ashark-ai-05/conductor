@@ -56,11 +56,24 @@ fn draw_tabs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         left,
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("herdr ", t.faint()),
-            Span::styled("✓", t.fg(t.pass)),
-            Span::styled(" · traces → Tempo ", t.faint()),
-        ]))
+        Paragraph::new(Line::from(if app.demo {
+            vec![
+                Span::styled("demo · ", t.faint()),
+                Span::styled("herdr ", t.faint()),
+                Span::styled("✓", t.fg(t.pass)),
+                Span::styled(" · traces → Tempo ", t.faint()),
+            ]
+        } else {
+            let running = app
+                .runs
+                .iter()
+                .filter(|r| r.status == Verdict::Running)
+                .count();
+            vec![Span::styled(
+                format!("{running} running · {} recorded ", app.receipts.len()),
+                t.faint(),
+            )]
+        }))
         .right_aligned()
         .block(
             Block::new()
@@ -77,7 +90,7 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         spans.push(Span::styled(msg.clone(), t.fg(t.accent)));
     } else {
         for (k, what, hot) in app.keys() {
-            let ks = if *hot {
+            let ks = if hot {
                 t.fg(t.accent).add_modifier(Modifier::BOLD)
             } else {
                 t.text().add_modifier(Modifier::BOLD)
@@ -85,7 +98,7 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             spans.push(Span::styled(format!(" {k} "), ks.bg(t.sel)));
             spans.push(Span::styled(
                 format!(" {what}   "),
-                if *hot { t.text() } else { t.dim() },
+                if hot { t.text() } else { t.dim() },
             ));
         }
     }
@@ -275,7 +288,7 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Constraint::Length(if done { 3 } else { 0 }),
         Constraint::Length(10),
         Constraint::Length(1),
-        Constraint::Length(5),
+        Constraint::Length(if run.herdr_tab.is_some() { 5 } else { 0 }),
         Constraint::Min(0),
     ])
     .areas(area);
@@ -288,19 +301,19 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         ])),
         h1,
     );
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
+    let mut keys = match run.herdr_tab {
+        Some(n) => vec![
             Span::styled(" t ", t.bold().bg(t.sel)),
-            Span::styled(
-                format!(" watch in tab {}   ", run.herdr_tab.unwrap_or(2)),
-                t.dim(),
-            ),
-            Span::styled(" r ", t.fg(t.accent).add_modifier(Modifier::BOLD).bg(t.sel)),
-            Span::styled(" receipt so far", t.text()),
-        ]))
-        .right_aligned(),
-        h2,
-    );
+            Span::styled(format!(" watch in tab {n}   "), t.dim()),
+        ],
+        None => vec![Span::styled("headless   ", t.faint())],
+    };
+    keys.push(Span::styled(
+        " r ",
+        t.fg(t.accent).add_modifier(Modifier::BOLD).bg(t.sel),
+    ));
+    keys.push(Span::styled(" receipt", t.text()));
+    f.render_widget(Paragraph::new(Line::from(keys)).right_aligned(), h2);
 
     // The pipeline: one column per stage, name on top, detail below.
     let widths: Vec<Constraint> = run.stages.iter().map(|_| Constraint::Fill(1)).collect();
@@ -330,20 +343,27 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     }
 
     if done {
+        let ended = run.ended.unwrap_or(Verdict::Passed);
+        let (headline, color, bg) = if ended == Verdict::Passed {
+            (" ✓ every check passed ".to_string(), t.pass, t.pass_bg)
+        } else {
+            (
+                format!(" {} the run {} ", ended.glyph(), ended.word()),
+                t.verdict(ended).fg.unwrap_or(t.fail),
+                t.sel,
+            )
+        };
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(
-                    " ✓ every check passed ",
-                    t.fg(t.pass).add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(headline, t.fg(color).add_modifier(Modifier::BOLD)),
                 Span::styled(" The receipt is ready. ", t.text()),
                 Span::styled("⏎ or r to open it", t.fg(t.accent)),
             ]))
             .block(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(t.fg(t.pass))
-                    .style(Style::new().bg(t.pass_bg)),
+                    .border_style(t.fg(color))
+                    .style(Style::new().bg(bg)),
             ),
             ready,
         );
@@ -419,7 +439,7 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         pane_spans.push(Span::styled(format!("pane {word}"), style));
         pane_spans.push(Span::raw("      "));
     }
-    let title = format!("herdr tab {}", run.herdr_tab.unwrap_or(2));
+    let title = format!("herdr tab {}", run.herdr_tab.unwrap_or_default());
     f.render_widget(
         Paragraph::new(vec![
             Line::from(pane_spans),
@@ -765,6 +785,21 @@ mod tests {
         }
         let s = render(&app, 140, 40);
         assert!(s.contains("The receipt is ready"), "{s}");
+    }
+
+    #[test]
+    fn a_failed_headless_run_says_so_and_offers_no_herdr_tab() {
+        let mut live = conductor_model::demo::live();
+        live.herdr_tab = None;
+        live.panes.clear();
+        live.ended = Some(Verdict::Failed);
+        let mut app = App::from_runs(vec![], vec![live]);
+        app.go(Screen::Live);
+        let s = render(&app, 140, 40);
+        assert!(s.contains("the run failed"), "{s}");
+        assert!(s.contains("headless"), "{s}");
+        assert!(!s.contains("watch in tab"), "{s}");
+        assert!(!s.contains("herdr tab"), "{s}");
     }
 
     #[test]

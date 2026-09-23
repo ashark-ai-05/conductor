@@ -7,6 +7,7 @@ pub mod agent_panes;
 pub mod engine;
 pub mod executor;
 pub mod herdr_exec;
+pub mod live;
 pub mod receipt;
 pub mod store;
 pub mod transcript;
