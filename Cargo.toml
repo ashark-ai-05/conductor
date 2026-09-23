@@ -1,0 +1,47 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/ashark-ai-05/conductor"
+
+[workspace.dependencies]
+anyhow = "1"
+crossterm = "0.29"
+globset = "0.4"
+hex = "0.4"
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+thiserror = "2"
+conductor-model = { path = "crates/conductor-model" }
+conductor-tui = { path = "crates/conductor-tui" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[package]
+name = "conductor"
+version.workspace = true
+edition.workspace = true
+description = "Agentic software work with receipts"
+publish = false
+
+[[bin]]
+name = "conductor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+conductor-model.workspace = true
+conductor-tui.workspace = true
+
+[lints]
+workspace = true

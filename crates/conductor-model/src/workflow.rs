@@ -1,0 +1,928 @@
+//! Workflow files (SPEC §13.1): parsing and the checks that run before anything starts.
+//!
+//! Validation is where a workflow's mistakes are cheapest. Everything here is pure: it reads
+//! the text it is given and reports, and it never guesses what a malformed field meant.
+//! Unknown fields are rejected, because a misspelt `frozen:` that silently does nothing is
+//! exactly the kind of gap an agent would walk through.
+
+use globset::{Glob, GlobMatcher};
+use serde::Deserialize;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+/// Each stage's outputs: output id to declared path.
+type Outputs<'a> = HashMap<&'a str, BTreeMap<&'a str, &'a str>>;
+
+/// herdr rejects agent start timeouts outside this range (SPEC §11.1).
+pub const HERDR_TIMEOUT_MS: std::ops::RangeInclusive<u64> = 3001..=300_000;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Workflow {
+    pub id: String,
+    pub version: u32,
+    pub kind: Kind,
+    #[serde(default)]
+    pub requires: Requires,
+    #[serde(default)]
+    pub runtime: Runtime,
+    #[serde(default)]
+    pub herdr: HerdrPolicy,
+    #[serde(default)]
+    pub budget: Budget,
+    #[serde(default)]
+    pub defaults: Defaults,
+    pub stages: Vec<Stage>,
+    #[serde(default)]
+    pub teardown: Vec<Teardown>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    Build,
+    Adhoc,
+    Qa,
+    Troubleshoot,
+    Analyse,
+}
+
+impl Kind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Build => "build",
+            Kind::Adhoc => "adhoc",
+            Kind::Qa => "qa",
+            Kind::Troubleshoot => "troubleshoot",
+            Kind::Analyse => "analyse",
+        }
+    }
+
+    /// The release a kind arrives in, or `None` when it is available now.
+    pub fn arrives_in(self) -> Option<&'static str> {
+        match self {
+            Kind::Build => None,
+            Kind::Adhoc | Kind::Qa => Some("v0.2"),
+            Kind::Troubleshoot | Kind::Analyse => Some("v0.3"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Requires {
+    pub conductor: Option<String>,
+    pub herdr_protocol: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
+    #[serde(default = "default_artifact_root")]
+    pub artifact_root: String,
+    #[serde(default = "one")]
+    pub max_parallel: u32,
+    #[serde(default)]
+    pub approvals: Approvals,
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Runtime {
+            artifact_root: default_artifact_root(),
+            max_parallel: 1,
+            approvals: Approvals::default(),
+        }
+    }
+}
+
+fn default_artifact_root() -> String {
+    ".conductor/{{run_id}}".into()
+}
+
+fn one() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Approvals {
+    #[default]
+    Manual,
+    Auto,
+}
+
+/// Who may drive herdr tabs and panes (SPEC §11.2).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HerdrPolicy {
+    #[serde(default = "yes")]
+    pub tab_per_run: bool,
+    #[serde(default = "yes")]
+    pub close_passed_panes: bool,
+    #[serde(default)]
+    pub agent_control: AgentControl,
+    #[serde(default)]
+    pub agents_may_start_agents: bool,
+}
+
+impl Default for HerdrPolicy {
+    fn default() -> Self {
+        HerdrPolicy {
+            tab_per_run: true,
+            close_passed_panes: true,
+            agent_control: AgentControl::default(),
+            agents_may_start_agents: false,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentControl {
+    None,
+    #[default]
+    OwnTab,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Budget {
+    pub advisory_max_cost_usd: Option<f64>,
+    pub max_stage_wall_clock_sec: Option<u64>,
+    pub max_mutation_wall_clock_sec: Option<u64>,
+    pub max_prompts_per_stage: Option<u32>,
+    pub max_total_wall_clock_sec: Option<u64>,
+    #[serde(default)]
+    pub on_exceeded: OnExceeded,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnExceeded {
+    #[default]
+    HaltBeforeNextStage,
+    HaltNow,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Defaults {
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub retries: Retries,
+    #[serde(default)]
+    pub on_failure: Option<String>,
+    #[serde(default)]
+    pub on_blocked: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Retries {
+    pub max: u32,
+    pub ladder: Vec<Rung>,
+}
+
+impl Default for Retries {
+    fn default() -> Self {
+        Retries {
+            max: 2,
+            ladder: vec![Rung::InContext, Rung::Fresh, Rung::CrossKind],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rung {
+    InContext,
+    Fresh,
+    CrossKind,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stage {
+    pub id: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    pub agent: Agent,
+    #[serde(default)]
+    pub context: Context,
+    pub prompt_file: Option<String>,
+    #[serde(default)]
+    pub inputs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub scope: Scope,
+    #[serde(default)]
+    pub outputs: Vec<Output>,
+    pub gate: Option<Gate>,
+    #[serde(default)]
+    pub gates: Vec<Gate>,
+    pub on_failure: Option<OnFailure>,
+    pub timeout_ms: Option<u64>,
+}
+
+impl Stage {
+    /// `gate:` and `gates:` together, in that order.
+    pub fn all_gates(&self) -> impl Iterator<Item = &Gate> {
+        self.gate.iter().chain(self.gates.iter())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Agent {
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Context {
+    /// A new agent process that never sees earlier stages' conversations.
+    #[default]
+    Fresh,
+    Continue,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scope {
+    #[serde(default)]
+    pub write: Vec<String>,
+    #[serde(default)]
+    pub frozen: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Output {
+    pub id: String,
+    pub path: String,
+    #[serde(default = "yes")]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnFailure {
+    pub action: String,
+    pub max: Option<u32>,
+    pub feedback: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Teardown {
+    pub id: String,
+    #[serde(default)]
+    pub always: bool,
+}
+
+/// A check conductor runs in its own process (SPEC §9.3).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Gate {
+    Scope,
+    FileNonempty {
+        #[serde(rename = "ref")]
+        output: String,
+    },
+    Schema {
+        #[serde(rename = "ref")]
+        output: String,
+        schema: String,
+    },
+    CommandAssert {
+        command: Vec<String>,
+        parser: Parser,
+        #[serde(default)]
+        assert: Vec<String>,
+        #[serde(default)]
+        reruns: u32,
+    },
+    Mutation {
+        tool: MutationTool,
+        #[serde(default = "yes")]
+        in_diff: bool,
+        min_score: f64,
+    },
+}
+
+impl Gate {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Gate::Scope => "scope",
+            Gate::FileNonempty { .. } => "file_nonempty",
+            Gate::Schema { .. } => "schema",
+            Gate::CommandAssert { .. } => "command_assert",
+            Gate::Mutation { .. } => "mutation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Parser {
+    CargoJson,
+    JunitXml,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationTool {
+    CargoMutants,
+}
+
+/// One problem, with where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Issue {
+    pub at: String,
+    pub message: String,
+}
+
+/// What validation found. A workflow runs only when `errors` is empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Report {
+    pub errors: Vec<Issue>,
+    pub warnings: Vec<Issue>,
+}
+
+impl Report {
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    fn error(&mut self, at: impl Into<String>, message: impl Into<String>) {
+        self.errors.push(Issue {
+            at: at.into(),
+            message: message.into(),
+        });
+    }
+
+    fn warn(&mut self, at: impl Into<String>, message: impl Into<String>) {
+        self.warnings.push(Issue {
+            at: at.into(),
+            message: message.into(),
+        });
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ParseError(#[from] serde_yaml::Error);
+
+impl Workflow {
+    pub fn parse(text: &str) -> Result<Self, ParseError> {
+        Ok(serde_yaml::from_str(text)?)
+    }
+
+    /// Everything that can be decided about a workflow without running it.
+    pub fn validate(&self) -> Report {
+        let mut r = Report::default();
+
+        if self.id.trim().is_empty() {
+            r.error("id", "must not be empty");
+        }
+        if self.version != 1 {
+            r.error(
+                "version",
+                format!("only version 1 exists; found {}", self.version),
+            );
+        }
+        if let Some(release) = self.kind.arrives_in() {
+            r.error(
+                "kind",
+                format!(
+                    "`{}` workflows arrive in {release}; this build runs `build` only",
+                    self.kind.name()
+                ),
+            );
+        }
+        if self.runtime.max_parallel == 0 {
+            r.error("runtime.max_parallel", "must be at least 1");
+        }
+        if self.stages.is_empty() {
+            r.error("stages", "a workflow needs at least one stage");
+        }
+        if let Some(t) = self.defaults.timeout_ms {
+            check_timeout(&mut r, "defaults.timeout_ms", t);
+        }
+        if self.defaults.retries.ladder.is_empty() && self.defaults.retries.max > 0 {
+            r.error(
+                "defaults.retries.ladder",
+                "retries are allowed but the ladder names no rungs",
+            );
+        }
+        for (field, value) in [
+            (
+                "budget.max_stage_wall_clock_sec",
+                self.budget.max_stage_wall_clock_sec,
+            ),
+            (
+                "budget.max_mutation_wall_clock_sec",
+                self.budget.max_mutation_wall_clock_sec,
+            ),
+            (
+                "budget.max_total_wall_clock_sec",
+                self.budget.max_total_wall_clock_sec,
+            ),
+        ] {
+            if value == Some(0) {
+                r.error(field, "a zero budget would halt every run before it starts");
+            }
+        }
+        if let Some(cost) = self.budget.advisory_max_cost_usd
+            && !(cost.is_finite() && cost > 0.0)
+        {
+            r.error("budget.advisory_max_cost_usd", "must be a positive amount");
+        }
+
+        let mut outputs: Outputs = HashMap::new();
+        let mut seen = BTreeSet::new();
+        for (i, s) in self.stages.iter().enumerate() {
+            let at = format!("stages[{i}]");
+            if !seen.insert(s.id.as_str()) {
+                r.error(
+                    format!("{at}.id"),
+                    format!("stage `{}` is defined twice", s.id),
+                );
+            }
+            outputs
+                .entry(s.id.as_str())
+                .or_default()
+                .extend(s.outputs.iter().map(|o| (o.id.as_str(), o.path.as_str())));
+        }
+
+        for (i, s) in self.stages.iter().enumerate() {
+            let at = format!("stages[{i}]");
+            for d in &s.depends_on {
+                if d == &s.id {
+                    r.error(
+                        format!("{at}.depends_on"),
+                        format!("stage `{}` depends on itself", s.id),
+                    );
+                } else if !seen.contains(d.as_str()) {
+                    r.error(
+                        format!("{at}.depends_on"),
+                        format!("no stage is called `{d}`"),
+                    );
+                }
+            }
+            if let Some(t) = s.timeout_ms {
+                check_timeout(&mut r, format!("{at}.timeout_ms"), t);
+            }
+            self.validate_stage(&mut r, &at, s, &outputs);
+        }
+
+        if let Some(cycle) = find_cycle(&self.stages) {
+            r.error(
+                "stages",
+                format!(
+                    "stages depend on each other in a loop: {}",
+                    cycle.join(" → ")
+                ),
+            );
+        }
+
+        if self.kind == Kind::Build {
+            self.separation_of_duties(&mut r);
+        }
+        r
+    }
+
+    fn validate_stage(&self, r: &mut Report, at: &str, s: &Stage, outputs: &Outputs) {
+        if s.agent.kind.trim().is_empty() {
+            r.error(
+                format!("{at}.agent.kind"),
+                "must name an agent, such as `claude` or `codex`",
+            );
+        }
+        let mut out_ids = BTreeSet::new();
+        for (j, o) in s.outputs.iter().enumerate() {
+            if !out_ids.insert(o.id.as_str()) {
+                r.error(
+                    format!("{at}.outputs[{j}].id"),
+                    format!("output `{}` is declared twice", o.id),
+                );
+            }
+            check_refs(r, &format!("{at}.outputs[{j}].path"), &o.path, outputs);
+        }
+        for (k, v) in &s.inputs {
+            check_refs(r, &format!("{at}.inputs.{k}"), v, outputs);
+        }
+
+        let write = self.compile_all(r, &format!("{at}.scope.write"), &s.scope.write, outputs);
+        for (j, raw) in s.scope.frozen.iter().enumerate() {
+            check_refs(r, &format!("{at}.scope.frozen[{j}]"), raw, outputs);
+            let f = &self.resolve(raw, outputs);
+            if Glob::new(f).is_err() {
+                r.error(
+                    format!("{at}.scope.frozen[{j}]"),
+                    format!("`{f}` is not a valid path pattern"),
+                );
+                continue;
+            }
+            // A frozen literal the same stage may write is a contradiction the scope gate
+            // would resolve in whichever direction it happened to check first.
+            if !f.contains('*')
+                && let Some(w) = write.iter().find(|(_, m)| m.is_match(f))
+            {
+                r.error(
+                    format!("{at}.scope.frozen[{j}]"),
+                    format!(
+                        "`{f}` is frozen, but this stage may also write it through `{}`",
+                        w.0
+                    ),
+                );
+            }
+        }
+
+        let gates: Vec<&Gate> = s.all_gates().collect();
+        if gates.is_empty() {
+            r.warn(
+                at.to_string(),
+                format!(
+                    "stage `{}` has no checks, so its receipt can prove nothing about it",
+                    s.id
+                ),
+            );
+        }
+        if !s.scope.write.is_empty()
+            && !gates.iter().any(|g| matches!(g, Gate::Scope))
+            && !s.scope.frozen.is_empty()
+        {
+            r.warn(
+                format!("{at}.gates"),
+                "frozen paths are declared but no `scope` gate checks them",
+            );
+        }
+        for (j, g) in gates.iter().enumerate() {
+            let gat = format!("{at}.gates[{j}]");
+            match g {
+                Gate::FileNonempty { output } | Gate::Schema { output, .. } => {
+                    if !out_ids.contains(output.as_str()) {
+                        r.error(
+                            format!("{gat}.ref"),
+                            format!("stage `{}` has no output called `{output}`", s.id),
+                        );
+                    }
+                }
+                Gate::CommandAssert {
+                    command, reruns, ..
+                } => {
+                    if command.is_empty() || command[0].trim().is_empty() {
+                        r.error(format!("{gat}.command"), "must name a program to run");
+                    }
+                    if *reruns > 10 {
+                        r.warn(
+                            format!("{gat}.reruns"),
+                            format!("{reruns} reruns will make every run slow"),
+                        );
+                    }
+                }
+                Gate::Mutation {
+                    min_score, in_diff, ..
+                } => {
+                    if !(0.0..=1.0).contains(min_score) {
+                        r.error(format!("{gat}.min_score"), "must be between 0 and 1");
+                    }
+                    if !in_diff {
+                        r.warn(format!("{gat}.in_diff"), "mutating the whole crate can take hours; `in_diff: true` is recommended");
+                    }
+                }
+                Gate::Scope => {
+                    if s.scope.write.is_empty() {
+                        r.error(
+                            gat.to_string(),
+                            "a `scope` gate needs `scope.write` to say what the stage may change",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// In a build workflow, the stage that writes the tests and the stage that must not touch
+    /// them should be different agents. Same agent is allowed, but called out.
+    fn compile_all(
+        &self,
+        r: &mut Report,
+        at: &str,
+        globs: &[String],
+        outputs: &Outputs,
+    ) -> Vec<(String, GlobMatcher)> {
+        let mut out = Vec::new();
+        for (j, raw) in globs.iter().enumerate() {
+            check_refs(r, &format!("{at}[{j}]"), raw, outputs);
+            let g = self.resolve(raw, outputs);
+            match Glob::new(&g) {
+                Ok(glob) => out.push((raw.clone(), glob.compile_matcher())),
+                Err(_) => r.error(
+                    format!("{at}[{j}]"),
+                    format!("`{raw}` is not a valid path pattern"),
+                ),
+            }
+        }
+        out
+    }
+
+    /// Replaces template references with what they stand for, so a pattern that names another
+    /// stage's output can be compared with real paths. `{{run_id}}` becomes a placeholder
+    /// segment that matches nothing a stage would write by accident.
+    fn resolve(&self, text: &str, outputs: &Outputs) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(start) = rest.find("{{") {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + 2..];
+            let Some(end) = after.find("}}") else {
+                out.push_str(&rest[start..]);
+                return out;
+            };
+            let key = after[..end].trim();
+            let value = match key {
+                "run_id" => "RUN".to_owned(),
+                "artifact_root" => self.resolve(&self.runtime.artifact_root, outputs),
+                _ => referenced_outputs(&format!("{{{{{key}}}}}"))
+                    .first()
+                    .and_then(|(st, o)| outputs.get(st.as_str()).and_then(|m| m.get(o.as_str())))
+                    .map(|p| self.resolve(p, outputs))
+                    .unwrap_or_default(),
+            };
+            out.push_str(&value);
+            rest = &after[end + 2..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    fn separation_of_duties(&self, r: &mut Report) {
+        for (i, s) in self.stages.iter().enumerate() {
+            for f in &s.scope.frozen {
+                for (dep_stage, _) in referenced_outputs(f) {
+                    if let Some(author) = self.stages.iter().find(|x| x.id == dep_stage)
+                        && author.agent.kind == s.agent.kind
+                    {
+                        r.warn(
+                            format!("stages[{i}].agent.kind"),
+                            format!(
+                                "`{}` and `{}` are both `{}`; a different agent for the tests makes them stronger evidence",
+                                author.id, s.id, s.agent.kind
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn check_timeout(r: &mut Report, at: impl Into<String>, t: u64) {
+    if !HERDR_TIMEOUT_MS.contains(&t) {
+        r.error(
+            at,
+            format!(
+                "{t} ms is outside herdr's accepted range of more than 3000 and at most 300000"
+            ),
+        );
+    }
+}
+
+/// `{{stages.<stage>.outputs.<output>.path}}` references in a string.
+fn referenced_outputs(text: &str) -> Vec<(String, String)> {
+    templates(text)
+        .filter_map(|t| {
+            let parts: Vec<&str> = t.split('.').collect();
+            match parts.as_slice() {
+                ["stages", stage, "outputs", output, "path"] => {
+                    Some(((*stage).to_owned(), (*output).to_owned()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn templates(text: &str) -> impl Iterator<Item = &str> {
+    text.split("{{")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("}}").map(|(inner, _)| inner.trim()))
+}
+
+fn check_refs(r: &mut Report, at: &str, text: &str, outputs: &Outputs) {
+    for t in templates(text) {
+        if t == "run_id" || t == "artifact_root" {
+            continue;
+        }
+        match referenced_outputs(&format!("{{{{{t}}}}}")).first() {
+            Some((stage, output)) => match outputs.get(stage.as_str()) {
+                None => r.error(
+                    at,
+                    format!("refers to stage `{stage}`, which doesn't exist"),
+                ),
+                Some(outs) if !outs.contains_key(output.as_str()) => r.error(
+                    at,
+                    format!("stage `{stage}` has no output called `{output}`"),
+                ),
+                Some(_) => {}
+            },
+            None => r.error(at, format!("`{{{{{t}}}}}` is not a value conductor knows")),
+        }
+    }
+}
+
+fn find_cycle(stages: &[Stage]) -> Option<Vec<String>> {
+    let deps: HashMap<&str, &[String]> = stages
+        .iter()
+        .map(|s| (s.id.as_str(), s.depends_on.as_slice()))
+        .collect();
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        Visiting,
+        Done,
+    }
+    fn visit<'a>(
+        id: &'a str,
+        deps: &HashMap<&'a str, &'a [String]>,
+        marks: &mut HashMap<&'a str, Mark>,
+        path: &mut Vec<&'a str>,
+    ) -> Option<Vec<String>> {
+        match marks.get(id) {
+            Some(Mark::Done) => return None,
+            Some(Mark::Visiting) => {
+                let start = path.iter().position(|p| *p == id).unwrap_or(0);
+                let mut cycle: Vec<String> =
+                    path[start..].iter().map(|s| (*s).to_owned()).collect();
+                cycle.push(id.to_owned());
+                return Some(cycle);
+            }
+            None => {}
+        }
+        marks.insert(id, Mark::Visiting);
+        path.push(id);
+        for d in deps.get(id).copied().unwrap_or_default() {
+            if d != id
+                && deps.contains_key(d.as_str())
+                && let Some(c) = visit(d.as_str(), deps, marks, path)
+            {
+                return Some(c);
+            }
+        }
+        path.pop();
+        marks.insert(id, Mark::Done);
+        None
+    }
+    let mut marks = HashMap::new();
+    for s in stages {
+        if let Some(c) = visit(s.id.as_str(), &deps, &mut marks, &mut Vec::new()) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = include_str!("../../../examples/build.yaml");
+
+    fn with(edit: impl FnOnce(&mut String)) -> Report {
+        let mut text = EXAMPLE.to_owned();
+        edit(&mut text);
+        Workflow::parse(&text).expect("still parses").validate()
+    }
+
+    fn messages(r: &Report) -> Vec<String> {
+        r.errors
+            .iter()
+            .map(|i| format!("{}: {}", i.at, i.message))
+            .collect()
+    }
+
+    #[test]
+    fn the_shipped_example_is_valid() {
+        let r = Workflow::parse(EXAMPLE).unwrap().validate();
+        assert!(r.is_ok(), "{:#?}", r.errors);
+    }
+
+    #[test]
+    fn a_misspelt_field_is_rejected_not_ignored() {
+        let text = EXAMPLE.replace("frozen:", "frozn:");
+        let err = Workflow::parse(&text).unwrap_err().to_string();
+        assert!(err.contains("frozn"), "{err}");
+    }
+
+    #[test]
+    fn later_kinds_say_when_they_arrive() {
+        let r = with(|t| *t = t.replacen("kind: build", "kind: qa", 1));
+        assert!(
+            messages(&r).iter().any(|m| m.contains("arrive in v0.2")),
+            "{:?}",
+            messages(&r)
+        );
+    }
+
+    #[test]
+    fn an_unknown_dependency_is_named() {
+        let r = with(|t| *t = t.replacen("depends_on: [tests]", "depends_on: [testz]", 1));
+        assert!(
+            messages(&r)
+                .iter()
+                .any(|m| m.contains("no stage is called `testz`"))
+        );
+    }
+
+    #[test]
+    fn a_dependency_loop_is_found() {
+        let r = with(|t| {
+            *t = t.replacen(
+                "  - id: spec\n",
+                "  - id: spec\n    depends_on: [implement]\n",
+                1,
+            )
+        });
+        assert!(
+            messages(&r).iter().any(|m| m.contains("loop")),
+            "{:?}",
+            messages(&r)
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_missing_output_is_named() {
+        let r = with(|t| *t = t.replacen("outputs.tests.path", "outputs.testz.path", 1));
+        assert!(
+            messages(&r)
+                .iter()
+                .any(|m| m.contains("no output called `testz`")),
+            "{:?}",
+            messages(&r)
+        );
+    }
+
+    #[test]
+    fn a_timeout_herdr_would_reject_is_caught_before_the_run() {
+        let r = with(|t| *t = t.replacen("timeout_ms: 300000", "timeout_ms: 3000", 1));
+        assert!(
+            messages(&r)
+                .iter()
+                .any(|m| m.contains("outside herdr's accepted range"))
+        );
+    }
+
+    #[test]
+    fn freezing_a_path_the_stage_may_write_is_a_contradiction() {
+        let r = with(|t| {
+            *t = t.replacen(
+                "write: [\"src/**\"]",
+                "write: [\"src/**\", \"tests/**\"]",
+                1,
+            )
+        });
+        assert!(
+            messages(&r)
+                .iter()
+                .any(|m| m.contains("is frozen, but this stage may also write it")),
+            "{:?}",
+            messages(&r)
+        );
+    }
+
+    #[test]
+    fn a_mutation_score_above_one_is_rejected() {
+        let r = with(|t| *t = t.replacen("min_score: 0.7", "min_score: 70", 1));
+        assert!(messages(&r).iter().any(|m| m.contains("between 0 and 1")));
+    }
+
+    #[test]
+    fn the_same_agent_writing_and_implementing_is_called_out() {
+        let r = with(|t| *t = t.replacen("kind: codex", "kind: claude", 1));
+        assert!(r.is_ok());
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.message.contains("both `claude`")),
+            "{:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn a_scope_gate_without_a_write_scope_is_an_error() {
+        let text = "id: x\nversion: 1\nkind: build\nstages:\n  - id: a\n    agent: { kind: claude }\n    gates: [{ type: scope }]\n";
+        let r = Workflow::parse(text).unwrap().validate();
+        assert!(
+            messages(&r)
+                .iter()
+                .any(|m| m.contains("needs `scope.write`"))
+        );
+    }
+}
