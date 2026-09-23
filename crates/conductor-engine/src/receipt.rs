@@ -163,6 +163,12 @@ pub fn build(
                     change: x.what.clone(),
                 }));
             }
+            for f in g.scope.iter().flat_map(|r| &r.generated) {
+                not_checked.push(format!(
+                    "{f} ({}): written by tooling, allowed but not reviewed",
+                    s.stage
+                ));
+            }
             if g.verdict == Verdict::Unwitnessed {
                 not_checked.push(format!("{} ({}): {}", g.gate, s.stage, g.detail));
             }

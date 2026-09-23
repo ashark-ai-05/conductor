@@ -66,14 +66,16 @@ pub struct Outcome {
 /// Paths an agent may never change, whatever the workflow says: conductor's own config.
 const ALWAYS_PROTECTED: &[&str] = &[".conductor/*.yaml", ".conductor/workflows/**", ".github/**"];
 
-fn policy_protected(repo: &Path, base: &str) -> Vec<String> {
-    let mut out: Vec<String> = ALWAYS_PROTECTED.iter().map(|s| s.to_string()).collect();
-    if let Ok(text) = worktree::show(repo, base, ".conductor/policy.yaml")
-        && let Ok(p) = Policy::parse(&text)
-    {
-        out.extend(p.protected);
-    }
-    out
+/// The repository policy at the base: (protected paths, files tooling writes).
+fn policy_paths(repo: &Path, base: &str) -> (Vec<String>, Vec<String>) {
+    let mut protected: Vec<String> = ALWAYS_PROTECTED.iter().map(|s| s.to_string()).collect();
+    let policy = worktree::show(repo, base, ".conductor/policy.yaml")
+        .ok()
+        .and_then(|text| Policy::parse(&text).ok())
+        .unwrap_or_default();
+    let generated = policy.generated();
+    protected.extend(policy.protected);
+    (protected, generated)
 }
 
 fn order(stages: &[Stage]) -> Vec<&Stage> {
@@ -334,7 +336,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         "headless"
     };
 
-    let protected = policy_protected(&opts.repo, &base);
+    let (protected, generated) = policy_paths(&opts.repo, &base);
     let stage_timeout = Duration::from_secs(wf.budget.max_stage_wall_clock_sec.unwrap_or(900));
     let total_budget = wf.budget.max_total_wall_clock_sec.map(Duration::from_secs);
     let mut records: Vec<StageRecord> = Vec::new();
@@ -503,6 +505,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     write: &paths.write,
                     frozen: &paths.frozen,
                     protected: &protected,
+                    generated: &generated,
                     outputs: &paths.outputs,
                     baseline_tests: baseline.as_ref(),
                     scratch: &scratch,

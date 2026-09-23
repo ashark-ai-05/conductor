@@ -369,10 +369,31 @@ pub struct Policy {
     /// Paths no agent may change.
     #[serde(default)]
     pub protected: Vec<String>,
+    /// Files build tools rewrite, which any stage may change (reported, never reviewed).
+    /// Unset means [`DEFAULT_GENERATED`]; `[]` means none.
+    pub generated: Option<Vec<String>>,
     pub min_mutation_score: Option<f64>,
 }
 
+/// Lockfiles that running a project's own tests or build can create or rewrite.
+pub const DEFAULT_GENERATED: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "go.sum",
+    "poetry.lock",
+    "uv.lock",
+];
+
 impl Policy {
+    pub fn generated(&self) -> Vec<String> {
+        match &self.generated {
+            Some(g) => g.clone(),
+            None => DEFAULT_GENERATED.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, ParseError> {
         Ok(serde_yaml::from_str(text)?)
     }

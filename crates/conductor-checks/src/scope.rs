@@ -38,6 +38,8 @@ pub struct Violation {
 pub struct ScopeReport {
     pub changed: Vec<String>,
     pub violations: Vec<Violation>,
+    /// Changed files that tooling writes (lockfiles): allowed, but nobody checked them.
+    pub generated: Vec<String>,
 }
 
 impl ScopeReport {
@@ -70,14 +72,19 @@ fn set(patterns: &[String]) -> Result<GlobSet, PatternError> {
 
 /// Compares changed paths (relative to the repository root, as git reports them) against a
 /// stage's patterns. Frozen and protected paths win over `write`: a stage allowed to write
-/// `tests/**` still may not touch the one test file an earlier stage locked.
+/// `tests/**` still may not touch the one test file an earlier stage locked. Files matching
+/// `generated` (lockfiles a build tool rewrites) may change in any stage, and are reported
+/// so the receipt can say nobody reviewed them.
 pub fn check(
     changed: &[String],
     write: &[String],
     frozen: &[String],
     protected: &[String],
+    generated: &[String],
 ) -> Result<ScopeReport, PatternError> {
-    let (write, frozen, protected) = (set(write)?, set(frozen)?, set(protected)?);
+    let (write, frozen, protected, gen_set) =
+        (set(write)?, set(frozen)?, set(protected)?, set(generated)?);
+    let mut generated = Vec::new();
     let mut changed: Vec<String> = changed.to_vec();
     changed.sort();
     changed.dedup();
@@ -88,10 +95,13 @@ pub fn check(
                 Breach::Protected
             } else if frozen.is_match(p) {
                 Breach::Frozen
-            } else if !write.is_match(p) {
-                Breach::OutsideScope
-            } else {
+            } else if write.is_match(p) {
                 return None;
+            } else if gen_set.is_match(p) {
+                generated.push(p.clone());
+                return None;
+            } else {
+                Breach::OutsideScope
             };
             Some(Violation {
                 path: p.clone(),
@@ -102,6 +112,7 @@ pub fn check(
     Ok(ScopeReport {
         changed,
         violations,
+        generated,
     })
 }
 
@@ -119,6 +130,7 @@ mod tests {
             &v(&["src/**", "tests/**"]),
             &v(&["tests/generated_tests.rs"]),
             &v(&[".github/**", "Cargo.lock"]),
+            &v(&["Cargo.lock", "package-lock.json"]),
         )
         .unwrap()
     }
@@ -149,6 +161,13 @@ mod tests {
     }
 
     #[test]
+    fn a_lockfile_tooling_wrote_passes_but_is_reported() {
+        let r = run(&["src/a.rs", "package-lock.json"]);
+        assert!(r.passed(), "{r:?}");
+        assert_eq!(r.generated, v(&["package-lock.json"]));
+    }
+
+    #[test]
     fn anything_else_is_outside_scope() {
         let r = run(&["README.md"]);
         assert_eq!(r.violations[0].breach, Breach::OutsideScope);
@@ -163,6 +182,6 @@ mod tests {
 
     #[test]
     fn a_bad_pattern_is_an_error() {
-        assert!(check(&v(&["a"]), &v(&["src/[**"]), &[], &[]).is_err());
+        assert!(check(&v(&["a"]), &v(&["src/[**"]), &[], &[], &[]).is_err());
     }
 }

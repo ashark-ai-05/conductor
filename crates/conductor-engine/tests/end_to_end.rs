@@ -308,3 +308,39 @@ fn a_run_in_herdr_gets_a_tab_and_closes_each_passed_stages_pane() {
             .any(|(k, v)| k == "where" && v.starts_with("herdr"))
     );
 }
+
+#[test]
+fn a_lockfile_rewritten_by_tooling_is_allowed_and_named_on_the_receipt() {
+    let d = repo(
+        "echo 'pub fn clamp(x: i32) -> i32 { if x > 10 { 10 } else { x } }' > src/lib.rs; echo '# touched' >> Cargo.lock",
+    );
+    let out = run(options(d.path())).expect("run completes");
+    assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    assert!(
+        out.receipt
+            .not_checked
+            .iter()
+            .any(|n| n.starts_with("Cargo.lock (implement): written by tooling")),
+        "{:#?}",
+        out.receipt.not_checked
+    );
+}
+
+#[test]
+fn the_policy_can_turn_lockfile_allowance_off() {
+    let d = repo(
+        "echo 'pub fn clamp(x: i32) -> i32 { if x > 10 { 10 } else { x } }' > src/lib.rs; echo '# touched' >> Cargo.lock",
+    );
+    fs::write(d.path().join(".conductor/policy.yaml"), "generated: []\n").unwrap();
+    git(d.path(), &["add", "-A"]);
+    git(d.path(), &["commit", "-qm", "policy"]);
+    let out = run(options(d.path())).expect("run completes");
+    assert_eq!(out.verdict, Verdict::Failed);
+    assert!(
+        out.receipt.checks.iter().any(|c| c
+            .detail
+            .starts_with("Cargo.lock is outside what this stage may change")),
+        "{:#?}",
+        out.receipt.checks
+    );
+}

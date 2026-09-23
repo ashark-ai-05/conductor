@@ -28,6 +28,8 @@ pub struct Context<'a> {
     pub write: &'a [String],
     pub frozen: &'a [String],
     pub protected: &'a [String],
+    /// Files build tools rewrite, allowed in any stage (the repository policy's `generated`).
+    pub generated: &'a [String],
     /// Output id → path relative to the worktree.
     pub outputs: &'a BTreeMap<String, String>,
     /// Test names that existed before this stage, so `tests_new` can be counted.
@@ -117,14 +119,26 @@ fn scope_gate(ctx: &Context) -> GateResult {
             return GateResult::unwitnessed("scope", format!("could not list changed files: {e}"));
         }
     };
-    let report = match scope::check(&changed, ctx.write, ctx.frozen, ctx.protected) {
+    let report = match scope::check(
+        &changed,
+        ctx.write,
+        ctx.frozen,
+        ctx.protected,
+        ctx.generated,
+    ) {
         Ok(r) => r,
         Err(e) => return GateResult::unwitnessed("scope", e.to_string()),
     };
     let (verdict, detail) = if report.passed() {
         (
             Verdict::Passed,
-            format!("{} file(s) changed, all within scope", report.changed.len()),
+            match report.generated.len() {
+                0 => format!("{} file(s) changed, all within scope", report.changed.len()),
+                n => format!(
+                    "{} file(s) changed, all within scope; {n} written by tooling",
+                    report.changed.len()
+                ),
+            },
         )
     } else {
         let v = &report.violations[0];
@@ -483,6 +497,7 @@ mod tests {
         write: Vec<String>,
         frozen: Vec<String>,
         protected: Vec<String>,
+        generated: Vec<String>,
         outputs: BTreeMap<String, String>,
         scratch: tempfile::TempDir,
     }
@@ -492,6 +507,7 @@ mod tests {
             write: vec!["src/**".into()],
             frozen: vec!["tests/locked.rs".into()],
             protected: vec!["Cargo.lock".into()],
+            generated: vec![],
             outputs: BTreeMap::from([("spec".into(), "spec.md".into())]),
             scratch: tempfile::tempdir().unwrap(),
         }
@@ -506,6 +522,7 @@ mod tests {
             write: &o.write,
             frozen: &o.frozen,
             protected: &o.protected,
+            generated: &o.generated,
             outputs: &o.outputs,
             baseline_tests: None,
             scratch: o.scratch.path(),
