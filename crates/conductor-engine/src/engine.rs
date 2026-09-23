@@ -8,7 +8,7 @@ use crate::receipt::{self, StageRecord};
 use crate::store::{Recorder, RunDir, new_run_id};
 use crate::worktree;
 use conductor_checks::gate::{self, GateResult};
-use conductor_model::workflow::{Gate, Policy, Rung, Stage, Workflow};
+use conductor_model::workflow::{AgentControl, Gate, Policy, Rung, Stage, Workflow};
 use conductor_model::{Event, Receipt, Source, Verdict};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -156,12 +156,32 @@ fn describe_gate(g: &Gate) -> String {
     }
 }
 
+/// How an agent opens panes beside its own, added to its brief when the workflow allows it.
+fn pane_help() -> String {
+    let bin = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "conductor".into());
+    format!(
+        "\n## Panes beside you\n\n\
+         You run in a herdr pane in this run's tab. To run something alongside you (a server, \
+         a watcher, a second shell), use:\n\
+         - `{bin} pane split [--down]` prints the new pane's id\n\
+         - `{bin} pane run <pane> <command>`\n\
+         - `{bin} pane read <pane> [--lines N]`\n\
+         - `{bin} pane close <pane>`\n\
+         - `{bin} pane list`\n\n\
+         You can reach only this run's tab, and run commands in and close only panes you \
+         opened. Every action goes on the run's record.\n"
+    )
+}
+
 fn brief_text(
     prompt: &str,
     task: &str,
     s: &Stage,
     p: &StagePaths,
     feedback: Option<&str>,
+    pane_help: Option<&str>,
 ) -> String {
     let mut t = String::new();
     t.push_str(prompt.trim());
@@ -188,6 +208,9 @@ fn brief_text(
     }
     for g in s.all_gates() {
         t.push_str(&format!("- Check: {}\n", describe_gate(g)));
+    }
+    if let Some(h) = pane_help {
+        t.push_str(h);
     }
     if let Some(f) = feedback {
         t.push_str("\n## What failed on the last attempt\n\n");
@@ -305,7 +328,10 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let herdr_run = match std::mem::replace(&mut opts.mode, Mode::Headless) {
         Mode::Headless => None,
         Mode::Herdr(h) => {
-            let hr = crate::herdr_exec::HerdrRun::new(h, &run_id);
+            let mut hr = crate::herdr_exec::HerdrRun::new(h, &run_id);
+            if wf.herdr.agent_control == AgentControl::OwnTab {
+                hr = hr.with_agent_control(dir.root.join("agent-actions.jsonl"));
+            }
             match hr
                 .herdr
                 .check_protocol()
@@ -341,6 +367,12 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let total_budget = wf.budget.max_total_wall_clock_sec.map(Duration::from_secs);
     let mut records: Vec<StageRecord> = Vec::new();
     let mut run_verdict = Verdict::Passed;
+    let mut actions_seen = 0usize;
+    let mut unmanaged_seen: BTreeSet<String> = BTreeSet::new();
+    let pane_help = herdr_run
+        .as_ref()
+        .filter(|hr| hr.agent_control())
+        .map(|_| pane_help());
 
     for stage in order(&wf.stages) {
         if let Some(limit) = total_budget
@@ -433,7 +465,14 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
 
             let brief = Brief {
                 stage: stage.id.clone(),
-                prompt: brief_text(&prompt, &opts.task, stage, &paths, feedback_text.as_deref()),
+                prompt: brief_text(
+                    &prompt,
+                    &opts.task,
+                    stage,
+                    &paths,
+                    feedback_text.as_deref(),
+                    pane_help.as_deref(),
+                ),
                 cwd: wt.clone(),
                 agent: stage.agent.clone(),
                 resume,
@@ -443,6 +482,13 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
             };
             let agent = exec.run(&brief);
             record_agent(&mut rec, &stage.id, &agent)?;
+            if let Some(hr) = &herdr_run {
+                let actions = hr.agent_actions();
+                for a in actions.iter().skip(actions_seen) {
+                    rec.record(Source::Observed, Some(&a.stage), a.describe())?;
+                }
+                actions_seen = actions.len();
+            }
             // A session id inherited from whoever launched conductor is not this agent's.
             let parent = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
             session = agent
@@ -578,6 +624,32 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         records.push(stage_rec);
         if let Some(hr) = &herdr_run {
             let passed = stage_verdict == Verdict::Passed;
+            for p in hr.unmanaged() {
+                if unmanaged_seen.insert(p.clone()) {
+                    if let Some(r) = records.last_mut() {
+                        r.note(&format!(
+                            "pane {p} appeared in the run's tab outside conductor; what ran there is unrecorded"
+                        ));
+                    }
+                    rec.record(
+                        Source::Inferred,
+                        Some(&stage.id),
+                        format!(
+                            "pane {p} in the run's tab was not opened by conductor or through `conductor pane`"
+                        ),
+                    )?;
+                }
+            }
+            if passed && wf.herdr.close_passed_panes {
+                for (p, ok) in hr.close_agent_panes(&stage.id) {
+                    let what = if ok {
+                        format!("closed pane {p} the agent left open")
+                    } else {
+                        format!("herdr would not close pane {p} the agent left open")
+                    };
+                    rec.record(Source::Witnessed, Some(&stage.id), what)?;
+                }
+            }
             let what = match hr.stage_done(&stage.id, passed, wf.herdr.close_passed_panes) {
                 PaneOutcome::Closed => "closed the stage's pane",
                 PaneOutcome::Kept => "kept the stage's pane for the next stage",

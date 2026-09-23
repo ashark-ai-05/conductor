@@ -76,6 +76,15 @@ pub struct Tab {
     pub root_pane: String,
 }
 
+/// A pane as `pane list` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfo {
+    pub pane_id: String,
+    pub tab_id: String,
+    pub cwd: Option<String>,
+    pub agent_status: Option<String>,
+}
+
 /// Which herdr server to talk to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -107,6 +116,14 @@ impl Herdr {
             target,
             owned: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    pub fn bin(&self) -> &Path {
+        &self.bin
+    }
+
+    pub fn target(&self) -> &Target {
+        &self.target
     }
 
     fn command(&self) -> Command {
@@ -219,6 +236,32 @@ impl Herdr {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .contains(id)
+    }
+
+    /// Treats a pane or tab as conductor's, after the caller has checked it may. `conductor
+    /// pane` runs in a fresh process, so it adopts the panes its run's tab holds.
+    pub fn adopt(&self, id: &str) {
+        self.own(id)
+    }
+
+    /// Every pane on the server.
+    pub fn panes(&self) -> Result<Vec<PaneInfo>, HerdrError> {
+        let v = self.call(&["pane", "list"])?;
+        Ok(result(&v)
+            .get("panes")
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let s = |k: &str| p.get(k).and_then(|x| x.as_str()).map(str::to_owned);
+                Some(PaneInfo {
+                    pane_id: s("pane_id")?,
+                    tab_id: s("tab_id")?,
+                    cwd: s("cwd"),
+                    agent_status: s("agent_status"),
+                })
+            })
+            .collect())
     }
 
     /// Opens a workspace, for when herdr has none yet (a fresh headless server). Returns

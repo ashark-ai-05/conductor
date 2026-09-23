@@ -398,22 +398,29 @@ recorded.
 
 **How agents reach it**
 
-- Per run, conductor installs a short **conductor skill** (instructions plus the commands
-  below) into the agent's context, next to the hooks it already installs, and sets
-  `CONDUCTOR_RUN`, `CONDUCTOR_STAGE` and `CONDUCTOR_SOCKET` in the pane's environment.
-- The agent calls `conductor pane open --cmd "cargo watch -x test"`, `conductor pane
-  send`, `conductor pane read`, `conductor pane close`, or `conductor tab list`.
-  Conductor checks the request against the workflow's `herdr` policy, performs it through
-  the herdr adapter, and writes an `observed` event naming the stage and agent that asked.
-- A refused request returns the reason (for example "pane 3.1 belongs to another run"), and
-  the refusal is also recorded.
+- When the workflow allows it (`herdr.agent_control: own_tab`, the default), conductor
+  puts the grant in the stage pane's environment (`CONDUCTOR_HERDR_TAB`,
+  `CONDUCTOR_ACTIONS`, `CONDUCTOR_STAGE`, `CONDUCTOR_BIN`, and the herdr session) and adds
+  a short "Panes beside you" section to the agent's brief listing the commands below.
+- The agent calls `conductor pane split [--down]` (prints the new pane id),
+  `conductor pane run <pane> <command>`, `conductor pane read <pane> [--lines N]`,
+  `conductor pane close <pane>` and `conductor pane list`. It can read any pane in its
+  run's tab, but run commands in and close only panes its own stage opened.
+- Each action is appended to the run's action log (`.conductor/runs/<id>/agent-actions.jsonl`,
+  outside the worktree), which the engine reads into the chain after every attempt as
+  `observed` events. The log is writable by the agent, so these are never `witnessed`.
+- A refused request returns the reason (for example "pane w1:p2 was not opened with
+  `conductor pane split`"), and the refusal is also recorded.
+- When a stage passes, conductor closes the panes its agent left open and records each
+  close as `witnessed`. A failed stage's panes stay open for a person.
 
 **Calls that bypass conductor**
 
-Agents can also call herdr's own CLI directly. Conductor subscribes to herdr's read-only
-event stream, so a pane or tab it didn't create or approve is still seen. It is recorded
-as `unmanaged`, listed under **not checked** in the receipt, and flagged live in the
-conductor pane. It is never silently adopted.
+Agents can also call herdr's own CLI directly. At the end of every stage conductor lists
+the panes in the run's tab; any it didn't open, and that wasn't opened through
+`conductor pane`, is recorded as an `inferred` event and listed under **not checked** in
+the receipt. It is never silently adopted. (Watching herdr's event stream to flag these
+live is planned.)
 
 **Starting other agents**
 
@@ -423,11 +430,12 @@ becomes a named sub-stage with its own hooks, evidence and line in the receipt. 
 paths and the scope check apply to every pane working in the run's worktree, so a
 sub-agent can't edit the locked tests either.
 
-**Headless runs**
+**Headless runs** *(planned)*
 
-Under the headless executor, `conductor pane open` starts the same command as a managed
-background process: its output is captured, it is stopped at stage end, and it is
-recorded the same way. A workflow that uses panes still runs in CI unchanged.
+Under the headless executor, `conductor pane split` + `run` will start the same command as
+a managed background process: its output captured, stopped at stage end, and recorded the
+same way, so a workflow that uses panes still runs in CI unchanged. Today `conductor pane`
+refuses outside a herdr run.
 
 ### 11.3 Record integrity **[new]**
 - The chain head is written to a `Conductor-Chain:` trailer on the run's final commit. Once

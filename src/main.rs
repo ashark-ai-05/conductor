@@ -19,6 +19,9 @@ usage:
   conductor verify <run-id>          re-check a run's record with no model calls
   conductor ui [--demo] [--light]    open the terminal UI over this repository's runs
   conductor validate <workflow.yaml> check a workflow before running it
+  conductor pane split [--from <pane>] [--down] | run <pane> <command> |
+                 read <pane> [--lines N] | close <pane> | list
+                                     for agents inside a run: panes in the run's tab
 
 The workflow is read from the base commit (HEAD by default), never from your
 working tree, and the run happens in its own git worktree and branch.";
@@ -41,6 +44,7 @@ fn real_main() -> Result<ExitCode> {
         Some("verify") => verify_cmd(&args[1..]),
         Some("ui") => ui(&args[1..]),
         Some("validate") => validate(&args[1..]),
+        Some("pane") => pane(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
             println!("{USAGE}");
             Ok(ExitCode::SUCCESS)
@@ -275,6 +279,68 @@ fn ui(args: &[String]) -> Result<ExitCode> {
         App::from_receipts(receipts)
     };
     conductor_tui::run(app, theme)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `conductor pane …`, for an agent inside a run in herdr.
+fn pane(args: &[String]) -> Result<ExitCode> {
+    let g = conductor_engine::agent_panes::Grant::from_env(herdr_handle())
+        .map_err(anyhow::Error::msg)?;
+    let usage = "usage: conductor pane split [--from <pane>] [--down] | run <pane> <command> | read <pane> [--lines N] | close <pane> | list";
+    match args.first().map(String::as_str) {
+        Some("split") => {
+            let mut from = None;
+            let mut down = false;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--from" => from = Some(it.next().context("--from needs a pane id")?.clone()),
+                    "--down" => down = true,
+                    "--right" => down = false,
+                    other => bail!("unknown option `{other}`\n{usage}"),
+                }
+            }
+            let cwd = std::env::current_dir()?;
+            let p = g
+                .split(from.as_deref(), down, &cwd)
+                .map_err(anyhow::Error::msg)?;
+            println!("{p}");
+        }
+        Some("run") => {
+            let [_, pane, cmd @ ..] = args else {
+                bail!("{usage}")
+            };
+            if cmd.is_empty() {
+                bail!("{usage}");
+            }
+            g.run(pane, &cmd.join(" ")).map_err(anyhow::Error::msg)?;
+        }
+        Some("read") => {
+            let (pane, lines) = match args {
+                [_, pane] => (pane, 80),
+                [_, pane, flag, n] if flag == "--lines" => {
+                    (pane, n.parse().context("--lines needs a number")?)
+                }
+                _ => bail!("{usage}"),
+            };
+            print!("{}", g.read(pane, lines).map_err(anyhow::Error::msg)?);
+        }
+        Some("close") => {
+            let [_, pane] = args else { bail!("{usage}") };
+            g.close(pane).map_err(anyhow::Error::msg)?;
+        }
+        Some("list") => {
+            for p in g.list().map_err(anyhow::Error::msg)? {
+                println!(
+                    "{}  {}  {}",
+                    p.pane_id,
+                    p.agent_status.unwrap_or_default(),
+                    p.cwd.unwrap_or_default()
+                );
+            }
+        }
+        _ => bail!("{usage}"),
+    }
     Ok(ExitCode::SUCCESS)
 }
 

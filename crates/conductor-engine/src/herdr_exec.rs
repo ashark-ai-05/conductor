@@ -5,12 +5,13 @@
 //! only *when* to look; what the agent did is read from its own session log, and whether the
 //! work is done is decided by the gates.
 
+use crate::agent_panes;
 use crate::executor::{AgentRun, Brief, Executor};
 use crate::transcript;
 use conductor_herdr::{AgentState, Direction, Herdr, HerdrError, Tab};
 use conductor_model::workflow::PermissionMode;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -19,6 +20,8 @@ pub struct HerdrRun {
     pub herdr: Herdr,
     run_id: String,
     state: Mutex<RunPanes>,
+    /// The run's agent action log, when agents may control panes in the run's tab.
+    actions: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -71,7 +74,69 @@ impl HerdrRun {
             herdr,
             run_id: run_id.to_owned(),
             state: Mutex::new(RunPanes::default()),
+            actions: None,
         }
+    }
+
+    /// Lets agents open and close panes in the run's tab, logging to `actions`.
+    pub fn with_agent_control(mut self, actions: PathBuf) -> Self {
+        self.actions = Some(actions);
+        self
+    }
+
+    pub fn agent_control(&self) -> bool {
+        self.actions.is_some()
+    }
+
+    /// The environment granting a stage's agent pane control; empty when not allowed.
+    pub fn agent_env(&self, stage: &str) -> Vec<(String, String)> {
+        match (&self.actions, self.tab_id()) {
+            (Some(a), Some(tab)) => agent_panes::env(&self.herdr, &tab, a, stage),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Everything agents did through `conductor pane`, in order.
+    pub fn agent_actions(&self) -> Vec<agent_panes::Action> {
+        self.actions
+            .as_deref()
+            .map(agent_panes::read_actions)
+            .unwrap_or_default()
+    }
+
+    /// Closes the panes a stage's agent opened and left open. Returns each with whether
+    /// herdr closed it.
+    pub fn close_agent_panes(&self, stage: &str) -> Vec<(String, bool)> {
+        agent_panes::open_panes(&self.agent_actions(), Some(stage))
+            .into_iter()
+            .map(|p| {
+                self.herdr.adopt(&p);
+                let ok = self.herdr.pane_close(&p).is_ok();
+                (p, ok)
+            })
+            .collect()
+    }
+
+    /// Panes in the run's tab that neither conductor nor an agent opened through it: a
+    /// person, or an agent calling herdr directly.
+    pub fn unmanaged(&self) -> Vec<String> {
+        let Some(tab) = self.tab_id() else {
+            return Vec::new();
+        };
+        let Ok(panes) = self.herdr.panes() else {
+            return Vec::new();
+        };
+        let mut known = agent_panes::open_panes(&self.agent_actions(), None);
+        {
+            let st = self.lock();
+            known.extend(st.stages.values().map(|e| e.0.clone()));
+            known.extend(st.free.clone());
+        }
+        panes
+            .into_iter()
+            .filter(|p| p.tab_id == tab && !known.contains(&p.pane_id))
+            .map(|p| p.pane_id)
+            .collect()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, RunPanes> {
@@ -199,7 +264,7 @@ impl Executor for HerdrExecutor<'_> {
             self.run.tab_id().unwrap_or_default()
         )];
         let mut run = match self.kind.as_str() {
-            "script" => run_script(&self.run.herdr, &pane, b),
+            "script" => run_script(&self.run.herdr, &pane, b, &self.run.agent_env(&b.stage)),
             "claude" => run_claude(self.run, &pane, b, &mut notes),
             other => failed(
                 format!("the herdr executor can't run `{other}` agents yet"),
@@ -233,10 +298,20 @@ fn failed(reason: String, started: Instant) -> AgentRun {
 /// Runs a scripted agent in the pane and waits for a sentinel only the command's *output*
 /// can contain: the arithmetic is evaluated by the shell, so the echoed command line never
 /// matches (SPEC §11.1).
-fn run_script(h: &Herdr, pane: &str, b: &Brief) -> AgentRun {
+fn exports(env: &[(String, String)]) -> String {
+    env.iter()
+        .map(|(k, v)| format!("{k}={}", quote(v)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn run_script(h: &Herdr, pane: &str, b: &Brief, env: &[(String, String)]) -> AgentRun {
     let started = Instant::now();
     let nonce = format!("{}{}", b.attempt, std::process::id());
-    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
     let cmd = b
         .agent
         .command
@@ -245,7 +320,8 @@ fn run_script(h: &Herdr, pane: &str, b: &Brief) -> AgentRun {
         .collect::<Vec<_>>()
         .join(" ");
     let line = format!(
-        "export CONDUCTOR_RUN_ID={} CONDUCTOR_STAGE={} CONDUCTOR_ATTEMPT={} CONDUCTOR_PROMPT={}; {cmd}; echo \"__cd_$((40+2))_{nonce}_rc=$?\"",
+        "export {} CONDUCTOR_RUN_ID={} CONDUCTOR_STAGE={} CONDUCTOR_ATTEMPT={} CONDUCTOR_PROMPT={}; {cmd}; echo \"__cd_$((40+2))_{nonce}_rc=$?\"",
+        exports(env),
         quote(&b.run_id),
         quote(&b.stage),
         b.attempt,
@@ -302,6 +378,15 @@ fn run_claude(run: &HerdrRun, pane: &str, b: &Brief, notes: &mut Vec<String>) ->
         Some(n) => n,
         None => {
             let n = agent_name(&b.stage, &b.run_id);
+            let env = run.agent_env(&b.stage);
+            if !env.is_empty() {
+                // The agent inherits the pane shell's environment; give the shell the grant
+                // first, then let it settle at its prompt before herdr starts the agent.
+                if let Err(e) = h.pane_run(pane, &format!("export {}", exports(&env))) {
+                    return failed(format!("herdr could not prepare the pane: {e}"), started);
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
             if let Err(e) = h.agent_start(&n, "claude", pane, &claude_args(b)) {
                 return failed(format!("herdr could not start claude: {e}"), started);
             }
