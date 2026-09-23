@@ -395,7 +395,7 @@ impl Policy {
     }
 
     pub fn parse(text: &str) -> Result<Self, ParseError> {
-        Ok(serde_yaml::from_str(text)?)
+        Ok(serde_norway::from_str(text)?)
     }
 }
 
@@ -435,11 +435,11 @@ impl Report {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub struct ParseError(#[from] serde_yaml::Error);
+pub struct ParseError(#[from] serde_norway::Error);
 
 impl Workflow {
     pub fn parse(text: &str) -> Result<Self, ParseError> {
-        Ok(serde_yaml::from_str(text)?)
+        Ok(serde_norway::from_str(text)?)
     }
 
     /// Everything that can be decided about a workflow without running it.
