@@ -1,0 +1,19 @@
+# Pull requests that conductor delivers carry their run's record in their last commit.
+# This re-checks that the receipt still describes the branch.
+name: receipt
+
+on: pull_request
+
+jobs:
+  check-pr:
+    if: startsWith(github.head_ref, 'conductor/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      # Build conductor from the branch's base, so the checker is not the code under review.
+      - run: git worktree add ../base "${{ github.event.pull_request.base.sha }}"
+      - run: cargo build --locked --manifest-path ../base/Cargo.toml
+      - run: ../base/target/debug/conductor check-pr
