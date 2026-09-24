@@ -122,6 +122,36 @@ pub fn commit_as_conductor(wt: &Path, msg: &str) -> Result<String, GitError> {
     head(wt)
 }
 
+/// Everything the worktree changed since `base`, as one patch: tracked changes, plus each
+/// new file against nothing, so an attempt's diff shows what it added as well as what it
+/// edited.
+pub fn diff_from(wt: &Path, base: &str) -> Result<String, GitError> {
+    let mut patch = git(wt, &["diff", "--no-ext-diff", "--no-color", base, "--"])?;
+    if !patch.is_empty() && !patch.ends_with('\n') {
+        patch.push('\n');
+    }
+    let untracked = git(wt, &["ls-files", "--others", "--exclude-standard"])?;
+    for f in untracked.lines().filter(|l| !l.is_empty()) {
+        // `--no-index` exits 1 when the files differ, which they always do here.
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(wt)
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--no-color",
+                "--no-index",
+                "--",
+                "/dev/null",
+                f,
+            ])
+            .output()
+            .map_err(GitError::Spawn)?;
+        patch.push_str(&String::from_utf8_lossy(&out.stdout));
+    }
+    Ok(patch)
+}
+
 /// Puts the worktree back exactly as it was at `sha`, keeping ignored files such as build
 /// output so a fresh attempt doesn't rebuild from nothing.
 pub fn reset(wt: &Path, sha: &str) -> Result<(), GitError> {

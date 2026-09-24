@@ -35,6 +35,10 @@ usage:
   conductor ui [--run <id>] [--demo] [--light]
                                      open the terminal UI over this repository's runs,
                                      including ones in progress
+  conductor serve [--port <n>] [--bind <addr>] [--open]
+                                     the same runs in a browser: each run as two lanes,
+                                     what the agent did and what conductor witnessed,
+                                     replayable, live while it runs; receipts; stats
   conductor validate <workflow.yaml> check a workflow before running it
   conductor pane split [--from <pane>] [--down] | run <pane> <command> |
                  read <pane> [--lines N] | close <pane> | list
@@ -73,6 +77,7 @@ fn real_main() -> Result<ExitCode> {
     match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
         Some("init") => setup::init(&repo_root()?),
+        Some("serve") => serve(&args[1..]),
         Some("doctor") => setup::doctor(&repo_root()?, herdr_handle()),
         Some("receipt") => receipt(&args[1..]),
         Some("verify") => verify_cmd(&args[1..]),
@@ -420,6 +425,32 @@ fn check_pr_cmd(args: &[String]) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+fn serve(args: &[String]) -> Result<ExitCode> {
+    let mut port: u16 = 7476;
+    let mut bind = "127.0.0.1".to_string();
+    let mut open = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--port" => port = it.next().context("--port needs a number")?.parse()?,
+            "--bind" => bind = it.next().context("--bind needs an address")?.clone(),
+            "--open" => open = true,
+            other => bail!("unknown option `{other}` for `conductor serve`"),
+        }
+    }
+    let repo = repo_root()?;
+    let server = conductor_web::Server::bind(&repo, &format!("{bind}:{port}"))
+        .with_context(|| format!("could not listen on {bind}:{port}"))?;
+    let addr = server.addr().context("no listening address")?;
+    let url = format!("http://{addr}/");
+    println!("conductor serve · {} · {url}", repo.display());
+    if open {
+        conductor_web::open_browser(&url);
+    }
+    server.serve_forever();
+    Ok(ExitCode::SUCCESS)
 }
 
 fn stats_cmd(args: &[String]) -> Result<ExitCode> {

@@ -45,6 +45,31 @@ Runs happen in a fresh git checkout, so a workflow's `setup:` installs what a ch
 doesn't carry, once per run: `setup: [["npm", "ci"]]`. What setup writes must be ignored by
 git (`node_modules/`), or the run halts rather than count it as an agent's change.
 
+## See a run
+
+```bash
+conductor serve --open
+```
+
+![A run as two lanes: what the agent did on the left, what conductor witnessed on the right](docs/screenshots/run.png)
+
+Every run is two lanes. The left one is what the agent did: each file it wrote, each
+command it ran, the tokens it spent. The right one is what conductor witnessed between:
+every check and its verdict, every retry, every halt. The agent never grades its own work,
+and here you can see who said what. The colour of an entry's edge is its evidence grade:
+witnessed by conductor, observed from the agent, measured, or only inferred.
+
+A run in progress updates as it happens. A finished one can be replayed event by event,
+and each attempt's diff is a click away, so a reviewer reads "try 1 wrote this, the check
+said no, try 2 changed these lines" instead of a final diff with no history.
+
+![Stats across runs: what catches the agent, cost per run, evidence mix](docs/screenshots/stats.png)
+
+The stats page is the lead's view: what stops agents, how each stage's tries end, cost
+per run and per verified change, and how much of the record is witnessed rather than
+observed or inferred. Everything is read from `.conductor/runs/`; the server writes
+nothing and listens on localhost.
+
 ## Commands
 
 | Command | What it does |
@@ -57,6 +82,7 @@ git (`node_modules/`), or the run halts rather than count it as an agent's chang
 | `check-pr` | In CI: check that a pull request's branch ends at a delivered run's receipt, from git alone |
 | `trace [<run>]`, `stats` | A run's timeline; what a repository's runs add up to |
 | `ui` | The terminal UI, including runs in progress (`--demo` for sample data) |
+| `serve` | The same runs in a browser: two lanes, replay, live, receipts, stats |
 | `pane …` | For agents inside a run: open, drive and close panes in the run's own tab |
 
 ## Delivering runs as pull requests

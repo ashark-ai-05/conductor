@@ -734,6 +734,14 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 }
             }
 
+            // What this attempt changed, kept whatever the checks said, so a person can see
+            // try 1 next to try 2. A fresh retry resets the tree and would lose it.
+            if let Ok(patch) = worktree::diff_from(&wt, &stage_base) {
+                let path = dir.attempt_diff(&stage.id, attempt);
+                let _ = std::fs::create_dir_all(path.parent().unwrap_or(&dir.root));
+                let _ = std::fs::write(path, patch);
+            }
+
             match first_bad {
                 None => {
                     stage_verdict = Verdict::Passed;

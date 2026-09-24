@@ -1,6 +1,8 @@
 # conductor — product definition
 
-Status: **for your confirmation. Nothing here is built yet.**
+Status: **v0.1 is built** (build workflows, any language via JUnit, receipts anchored in
+git, PR delivery and `check-pr`, metrics, terminal UI and `conductor serve`). The rest of
+this document is the definition it was built to; the tables below say what is in.
 Companion docs: `SPEC.md` (engine contract), `ASSESSMENT.md` (why, risks, pilot).
 
 ---
