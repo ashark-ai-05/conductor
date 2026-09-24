@@ -5,4 +5,4 @@ below asks for, including edge cases.
 If the tests call something that does not exist yet, add it under that crate's src/ with its
 real signature and a body of `todo!()`, and make it public, so the tests compile. Nothing
 more: do not implement anything. Every test you add must fail. Run
-`cargo test --workspace` to confirm they compile and fail.
+`cargo test --workspace` to confirm they compile and fail. Before you finish, run `cargo fmt --all` and make `cargo clippy --workspace --all-targets -- -D warnings` clean: both are checked, and the implementer can't change your test files.

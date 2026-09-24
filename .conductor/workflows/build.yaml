@@ -31,6 +31,8 @@ stages:
           - "tests_new > 0"
           - "tests_failed == tests_new"
           - "failures.kind all != 'trivial'"
+      - { type: command_assert, command: ["cargo", "fmt", "--all", "--check"], parser: exit }
+      - { type: command_assert, command: ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"], parser: exit }
 
   - id: implement
     depends_on: [tests]
@@ -49,4 +51,6 @@ stages:
         reruns: 1
         # tests_new == 0: the implementer adds no tests of its own, even inside src/.
         assert: ["tests_failed == 0", "tests_run > 0", "tests_new == 0"]
+      - { type: command_assert, command: ["cargo", "fmt", "--all", "--check"], parser: exit }
+      - { type: command_assert, command: ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"], parser: exit }
       - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.6 }
