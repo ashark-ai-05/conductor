@@ -299,15 +299,49 @@ pub fn total(metrics: &[Metric], name: &str, filter: &[(&str, &str)]) -> f64 {
             Value::Double(d) => *d,
             Value::Observations(o) => o.len() as f64,
         })
-        .sum()
+        .sum::<f64>()
+        + 0.0 // avoid -0.0 from an empty sum, which would print with a spurious "-"
 }
 
 /// The runs screen's three headline numbers, from every run recorded in the repository:
 /// how many passed, how often a check caught the agent, and total spend. `None` when the
 /// repository has no recorded runs.
-#[allow(unused_variables)]
 pub fn headline_stats(repo: &std::path::Path) -> Option<[(String, String); 3]> {
-    todo!()
+    let ids = crate::list_runs(repo);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut all: Vec<Metric> = vec![];
+    for id in &ids {
+        let events = crate::store::RunDir::for_run(repo, id)
+            .read_events()
+            .unwrap_or_default();
+        let trace = crate::trace::build(id, &events);
+        merge(&mut all, collect(&trace, &events));
+    }
+
+    let runs = total(&all, "conductor.runs", &[]);
+    let passed = total(&all, "conductor.runs", &[("verdict", "passed")]);
+    let finished = total(&all, "conductor.attempts", &[("outcome", "passed")])
+        + total(&all, "conductor.attempts", &[("outcome", "check_failed")]);
+    let caught = total(&all, "conductor.catches", &[]);
+    let cost = total(&all, "conductor.cost", &[]);
+    let tokens = total(&all, "conductor.tokens", &[]);
+
+    Some([
+        (
+            format!("{passed:.0} of {runs:.0} passed"),
+            "runs recorded in this repository".to_string(),
+        ),
+        (
+            format!("{} caught", pct(caught, finished)),
+            "the agent said done, a check said no".to_string(),
+        ),
+        (
+            format!("${cost:.2}"),
+            format!("{} tokens across all runs", human(tokens)),
+        ),
+    ])
 }
 
 /// The distinct values one attribute takes in a metric.
