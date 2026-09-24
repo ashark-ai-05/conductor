@@ -1,0 +1,1569 @@
+[
+  {
+    "stage": "tests",
+    "agent": "claude",
+    "verdict": "passed",
+    "attempts": 1,
+    "gates": [
+      {
+        "gate": "scope",
+        "verdict": "passed",
+        "detail": "5 file(s) changed, all within scope",
+        "executions": [],
+        "scope": {
+          "changed": [
+            "crates/conductor-engine/src/metrics.rs",
+            "crates/conductor-engine/tests/headline_stats.rs",
+            "crates/conductor-tui/src/app.rs",
+            "crates/conductor-tui/tests/headline_stats.rs",
+            "src/main.rs"
+          ],
+          "violations": [],
+          "generated": []
+        }
+      },
+      {
+        "gate": "command_assert",
+        "verdict": "passed",
+        "detail": "153 passed, 11 failed; every assertion held",
+        "executions": [
+          {
+            "argv": [
+              "cargo",
+              "test",
+              "--workspace",
+              "--no-fail-fast",
+              "--message-format",
+              "json"
+            ],
+            "ended": "exited",
+            "exit_code": 101,
+            "duration_ms": 7308,
+            "stdout_truncated": false,
+            "stdout_sha256": "sha256:0a45ddcf6805c4186e3d45b5f5744804f18dd14b7c1b0f7d5480ba89964c877b",
+            "stderr_sha256": "sha256:fdb3acee215f236ece130ff4bcb4c7a669ab2fce191d9ae9d7f85b5b5d670582",
+            "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/main.rs (target/debug/deps/conductor-b535a1fc79ddfc37)\nerror: test failed, to rerun pass `-p conductor --bin conductor`\n     Running tests/agent_panes.rs (target/debug/deps/agent_panes-538add971d1ee408)\n     Running tests/deliver.rs (target/debug/deps/deliver-2c507505a77e423e)\n     Running tests/observability.rs (target/debug/deps/observability-691a60561dd1a511)\n     Running tests/setup.rs (target/debug/deps/setup-63a4283d828bda76)\n     Running unittests src/lib.rs (target/debug/deps/conductor_checks-58f900709ce5fe35)\n     Running unittests src/lib.rs (target/debug/deps/conductor_engine-502ecdbd26f2e167)\n     Running tests/end_to_end.rs (target/debug/deps/end_to_end-8eb0965fe3c7c60a)\n     Running tests/headline_stats.rs (target/debug/deps/headline_stats-25e436d4261aea6e)\nerror: test failed, to rerun pass `-p conductor-engine --test headline_stats`\n     Running unittests src/lib.rs (target/debug/deps/conductor_herdr-144cf68128d4c0bc)\n     Running tests/contract.rs (target/debug/deps/contract-d9de8ac74b897430)\n     Running unittests src/lib.rs (target/debug/deps/conductor_model-078ba0ae2bb59e1a)\n     Running unittests src/lib.rs (target/debug/deps/conductor_tui-7ab42ed3c486d7b7)\n     Running tests/headline_stats.rs (target/debug/deps/headline_stats-14ac0277788a85d2)\nerror: test failed, to rerun pass `-p conductor-tui --test headline_stats`\n   Doc-tests conductor_checks\n   Doc-tests conductor_engine\n   Doc-tests conductor_herdr\n   Doc-tests conductor_model\n   Doc-tests conductor_tui\nerror: 3 targets failed:\n    `-p conductor --bin conductor`\n    `-p conductor-engine --test headline_stats`\n    `-p conductor-tui --test headline_stats`",
+            "reason": null
+          }
+        ],
+        "assertions": [
+          {
+            "expr": "compiled == true",
+            "run": 0,
+            "holds": true,
+            "observed": "true"
+          },
+          {
+            "expr": "tests_new > 0",
+            "run": 0,
+            "holds": true,
+            "observed": "11"
+          },
+          {
+            "expr": "tests_failed == tests_new",
+            "run": 0,
+            "holds": true,
+            "observed": "11"
+          },
+          {
+            "expr": "failures.kind all != 'trivial'",
+            "run": 0,
+            "holds": true,
+            "observed": "11 of failures: 'assertion', 'panic', 'unimplemented'"
+          }
+        ],
+        "tests": {
+          "compiled": true,
+          "compile_errors": 0,
+          "tests": [
+            {
+              "name": "setup::tests::the_starter_policy_parses",
+              "outcome": "passed"
+            },
+            {
+              "name": "setup::tests::the_starter_workflow_is_valid",
+              "outcome": "passed"
+            },
+            {
+              "name": "headline_stats_tests::repo_runs_stats_come_from_run_metrics_not_receipts",
+              "outcome": "failed",
+              "failure": "panic",
+              "message": "a repository with a recorded run has stats"
+            },
+            {
+              "name": "an_agent_opens_a_pane_in_its_own_tab_and_nowhere_else",
+              "outcome": "passed"
+            },
+            {
+              "name": "headless_panes_are_background_processes_stopped_at_stage_end",
+              "outcome": "passed"
+            },
+            {
+              "name": "check_pr_says_so_when_a_branch_has_no_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_failed_run_is_not_delivered",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_passed_run_becomes_a_draft_pr_that_check_pr_accepts_until_it_changes",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_dead_collector_warns_but_does_not_fail_the_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_is_exported_and_its_trace_is_on_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "init_says_plainly_when_a_project_is_not_rust",
+              "outcome": "passed"
+            },
+            {
+              "name": "init_sets_up_a_rust_repository_once_and_keeps_what_is_there",
+              "outcome": "passed"
+            },
+            {
+              "name": "doctor_insists_workflows_are_committed",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_init_workflow_stops_a_tests_agent_that_implements_the_work",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_init_workflow_lets_tests_stub_new_code_and_passes_an_honest_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::an_empty_list_satisfies_all_and_fails_any",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::an_unknown_name_is_an_error_not_false",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::comparisons_between_facts_and_values",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::prose_is_rejected",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::quantifiers_over_a_list",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::the_observed_value_is_kept_for_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::a_build_that_failed_reports_no_tests_and_its_errors",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::a_real_red_run_is_read_test_by_test",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::mismatched_types_are_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::each_failure_is_classified_by_why_it_panicked",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::output_with_no_build_messages_leaves_compiled_unknown",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::the_old_panic_format_is_read_too",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::the_message_stops_before_the_backtrace",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::file_nonempty_needs_real_content",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::mutation_of_no_change_is_unwitnessed",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::an_assertion_nobody_can_evaluate_is_unwitnessed_not_failed",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::green_tests_pass_on_every_rerun",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::a_flaky_test_is_flaky_not_passed",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::a_bad_revision_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::scope_passes_inside_and_fails_on_a_locked_file",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::a_clean_tree_has_no_changes",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::a_file_is_read_as_it_was_at_the_base",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::a_real_run_is_counted_and_scored",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::junk_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::no_viable_mutants_is_no_score_not_a_perfect_one",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::survivors_say_where_and_what_changed",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::a_loud_command_does_not_deadlock",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::a_missing_program_is_not_run_with_a_reason",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::edits_new_files_and_moves_all_count_as_changes",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::an_agent_keeps_its_credentials_but_not_its_parents_session",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::an_empty_command_is_refused",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::credentials_do_not_reach_the_command",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::exit_code_and_output_are_recorded",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::a_bad_pattern_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::a_lockfile_tooling_wrote_passes_but_is_reported",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::anything_else_is_outside_scope",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::changes_inside_scope_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::no_changes_is_a_pass_with_nothing_changed",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::protected_paths_are_named_as_such",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::touching_the_locked_tests_fails_even_though_tests_are_writable",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::red_for_the_right_reason_is_told_apart_from_assert_false",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::a_timeout_kills_the_whole_group",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::mutation_scores_the_change_and_names_survivors",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::without_the_grant_pane_control_is_refused",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::actions_read_as_plain_sentences",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::open_panes_are_splits_not_yet_closed",
+              "outcome": "passed"
+            },
+            {
+              "name": "deliver::tests::github_remotes_name_their_repository",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::a_garbled_log_line_is_skipped",
+              "outcome": "passed"
+            },
+            {
+              "name": "deliver::tests::the_body_leads_with_the_verdict_and_carries_a_marker",
+              "outcome": "passed"
+            },
+            {
+              "name": "herdr_exec::tests::agent_names_fit_herdrs_rules",
+              "outcome": "passed"
+            },
+            {
+              "name": "executor::tests::resume_and_options_reach_the_command_line",
+              "outcome": "passed"
+            },
+            {
+              "name": "executor::tests::a_real_claude_stream_is_read",
+              "outcome": "passed"
+            },
+            {
+              "name": "executor::tests::a_stream_without_a_result_did_not_finish",
+              "outcome": "passed"
+            },
+            {
+              "name": "live::tests::the_title_is_the_first_line_without_heading_marks",
+              "outcome": "passed"
+            },
+            {
+              "name": "local_panes::tests::reading_keeps_the_last_lines",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::summary_tests::the_summary_reads_as_sentences",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::tests::a_real_run_is_counted",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::tests::no_attribute_names_the_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::tests::two_runs_add_up",
+              "outcome": "passed"
+            },
+            {
+              "name": "live::tests::a_run_whose_process_is_gone_is_not_shown_as_running",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::metrics_are_deltas_with_bucketed_durations",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::nothing_is_exported_without_an_endpoint",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::an_unreachable_collector_is_an_error_not_a_hang",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::the_bodies_have_the_otlp_shape",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::what_agents_did_is_summarised_unless_content_capture_is_on",
+              "outcome": "passed"
+            },
+            {
+              "name": "store::tests::recorded_events_read_back_and_verify",
+              "outcome": "passed"
+            },
+            {
+              "name": "trace::tests::a_real_run_becomes_stages_attempts_agents_and_checks",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::a_run_is_sent_as_traces_then_logs",
+              "outcome": "passed"
+            },
+            {
+              "name": "trace::tests::ids_are_stable_and_the_right_size",
+              "outcome": "passed"
+            },
+            {
+              "name": "trace::tests::the_tree_renders_with_durations_and_failures",
+              "outcome": "passed"
+            },
+            {
+              "name": "transcript::tests::the_newest_log_since_the_attempt_started_is_read",
+              "outcome": "passed"
+            },
+            {
+              "name": "transcript::tests::the_project_directory_is_the_cwd_with_separators_replaced",
+              "outcome": "passed"
+            },
+            {
+              "name": "transcript::tests::usage_is_counted_once_per_message_and_tools_are_observed",
+              "outcome": "passed"
+            },
+            {
+              "name": "store::tests::run_ids_are_distinct_and_sortable",
+              "outcome": "passed"
+            },
+            {
+              "name": "local_panes::tests::a_pane_runs_in_the_background_and_is_stopped",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_in_herdr_gets_a_tab_and_closes_each_passed_stages_pane",
+              "outcome": "passed"
+            },
+            {
+              "name": "an_implementer_that_edits_the_locked_tests_never_passes",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_lockfile_rewritten_by_tooling_is_allowed_and_named_on_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_workflow_is_read_from_the_base_not_the_working_tree",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_retries_fresh_after_failing_tests_and_passes_with_a_verifiable_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "tampering_with_the_stored_record_is_caught",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_policy_can_turn_lockfile_allowance_off",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_live_view_ends_with_the_runs_verdict_and_every_stage",
+              "outcome": "passed"
+            },
+            {
+              "name": "an_empty_runs_directory_is_none",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "a_run_with_no_finished_attempts_shows_a_dash_for_the_catch_rate",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "labels_are_the_documented_ones",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "a_run_without_a_receipt_is_not_recorded",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "no_conductor_directory_at_all_is_none",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "one_recorded_run_matches_the_documented_example",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "two_recorded_runs_are_merged_before_the_stats_are_derived",
+              "outcome": "failed",
+              "failure": "unimplemented",
+              "message": "not yet implemented"
+            },
+            {
+              "name": "tests::ids_are_read_from_nested_results",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::server_errors_are_read_from_json",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::states_map_and_ready_means_idle_or_done",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::nothing_conductor_did_not_create_can_be_closed",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::a_missing_binary_says_so",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_tab_with_a_pane_that_runs_a_command_and_is_read_back",
+              "outcome": "passed"
+            },
+            {
+              "name": "conductor_refuses_to_close_what_it_did_not_open",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_server_error_comes_back_with_herdrs_code",
+              "outcome": "passed"
+            },
+            {
+              "name": "demo::tests::the_demo_receipt_passes_on_its_own_rows",
+              "outcome": "passed"
+            },
+            {
+              "name": "demo::tests::the_evidence_feed_keeps_only_its_latest_lines",
+              "outcome": "passed"
+            },
+            {
+              "name": "demo::tests::the_demo_run_finishes_after_its_last_step",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::deleting_an_event_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::editing_an_event_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::a_rehashed_event_still_breaks_the_next_link",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::an_untouched_chain_verifies_to_its_head",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::only_witnessed_facts_count_as_proof",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::the_empty_chain_verifies_to_genesis",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::a_check_that_never_ran_keeps_the_run_from_passing",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::a_failure_outranks_everything_after_it",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::a_pass_nobody_witnessed_fails_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::relabelling_a_guess_as_proof_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::events_round_trip_through_json",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::an_override_is_visible_in_the_verdict",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::flaky_is_never_a_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::no_checks_is_not_a_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::all_witnessed_passes_make_a_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_misspelt_field_is_rejected_not_ignored",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_scope_gate_without_a_write_scope_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_script_agent_needs_a_command",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_reference_to_a_missing_output_is_named",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_dependency_loop_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_mutation_score_above_one_is_rejected",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_timeout_herdr_would_reject_is_caught_before_the_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::templates_render_to_real_paths_for_a_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::freezing_a_path_the_stage_may_write_is_a_contradiction",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::later_kinds_say_when_they_arrive",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::an_unknown_dependency_is_named",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::the_same_agent_writing_and_implementing_is_called_out",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::the_shipped_example_is_valid",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::enter_opens_a_running_run_live_and_a_finished_one_as_a_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::a_run_in_progress_is_listed_first_and_opens_live",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::number_keys_switch_screens",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::r_opens_the_receipt_from_every_screen",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::real_runs_open_their_own_receipts",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::selection_stays_inside_the_list",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::starting_a_run_restarts_the_live_view",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::the_demo_only_advances_while_you_watch",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::typing_a_spec_path_does_not_trigger_shortcuts",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::ticks_keep_the_selection_on_the_same_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_launch_screen_asks_three_questions",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::a_failed_headless_run_says_so_and_offers_no_herdr_tab",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_live_screen_offers_the_receipt_when_done",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_live_screen_shows_checks_evidence_and_panes",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_receipt_screen_leads_with_the_verdict_and_what_was_proven",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_runs_screen_shows_the_list_and_who_needs_you",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::every_screen_draws_in_a_small_terminal_without_panicking",
+              "outcome": "passed"
+            },
+            {
+              "name": "from_source_prefers_the_sources_own_stats_over_receipt_derived_ones",
+              "outcome": "failed",
+              "failure": "assertion",
+              "message": "assertion `left == right` failed\n  left: [(\"1\", \"runs recorded in this repository\"), (\"1 passed\", \"every check witnessed by conductor\"), (\"0 did not pass\", \"open one to see which check stopped it\")]\n right: [(\"1 of 1 passed\", \"runs recorded in this repository\"), (\"33% caught\", \"the agent said done, a check said no\"), (\"$0.44\", \"672k tokens across all runs\")]"
+            },
+            {
+              "name": "tick_re_reads_the_sources_stats_rather_than_caching_them",
+              "outcome": "failed",
+              "failure": "assertion",
+              "message": "assertion `left == right` failed\n  left: \"1\"\n right: \"1 of 1 passed\""
+            },
+            {
+              "name": "tick_keeps_showing_the_sources_stats",
+              "outcome": "failed",
+              "failure": "assertion",
+              "message": "assertion `left == right` failed\n  left: [(\"1\", \"runs recorded in this repository\"), (\"1 passed\", \"every check witnessed by conductor\"), (\"0 did not pass\", \"open one to see which check stopped it\")]\n right: [(\"1 of 1 passed\", \"runs recorded in this repository\"), (\"33% caught\", \"the agent said done, a check said no\"), (\"$0.44\", \"672k tokens across all runs\")]"
+            }
+          ]
+        }
+      }
+    ],
+    "tool_calls": 44,
+    "turns": 45,
+    "tokens": 3524954,
+    "cost_usd": 1.4762227999999995,
+    "model": "claude-sonnet-5",
+    "notes": [],
+    "declared": [
+      "scope",
+      "command_assert"
+    ]
+  },
+  {
+    "stage": "implement",
+    "agent": "claude",
+    "verdict": "passed",
+    "attempts": 1,
+    "gates": [
+      {
+        "gate": "scope",
+        "verdict": "passed",
+        "detail": "3 file(s) changed, all within scope",
+        "executions": [],
+        "scope": {
+          "changed": [
+            "crates/conductor-engine/src/metrics.rs",
+            "crates/conductor-tui/src/app.rs",
+            "src/main.rs"
+          ],
+          "violations": [],
+          "generated": []
+        }
+      },
+      {
+        "gate": "command_assert",
+        "verdict": "passed",
+        "detail": "164 passed, 0 failed; every assertion held on all 2 runs",
+        "executions": [
+          {
+            "argv": [
+              "cargo",
+              "test",
+              "--workspace",
+              "--message-format",
+              "json"
+            ],
+            "ended": "exited",
+            "exit_code": 0,
+            "duration_ms": 7400,
+            "stdout_truncated": false,
+            "stdout_sha256": "sha256:9d425a1c565d78f2539b8aef85bfe2e55ca6d0a6fb006cfcc2103ef329e477be",
+            "stderr_sha256": "sha256:e63bd2918e2d4b0ccd7f658f787c9f77c17828e8a4976695d877dcf065d8a2b7",
+            "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running unittests src/main.rs (target/debug/deps/conductor-b535a1fc79ddfc37)\n     Running tests/agent_panes.rs (target/debug/deps/agent_panes-538add971d1ee408)\n     Running tests/deliver.rs (target/debug/deps/deliver-2c507505a77e423e)\n     Running tests/observability.rs (target/debug/deps/observability-691a60561dd1a511)\n     Running tests/setup.rs (target/debug/deps/setup-63a4283d828bda76)\n     Running unittests src/lib.rs (target/debug/deps/conductor_checks-58f900709ce5fe35)\n     Running unittests src/lib.rs (target/debug/deps/conductor_engine-502ecdbd26f2e167)\n     Running tests/end_to_end.rs (target/debug/deps/end_to_end-8eb0965fe3c7c60a)\n     Running tests/headline_stats.rs (target/debug/deps/headline_stats-25e436d4261aea6e)\n     Running unittests src/lib.rs (target/debug/deps/conductor_herdr-144cf68128d4c0bc)\n     Running tests/contract.rs (target/debug/deps/contract-d9de8ac74b897430)\n     Running unittests src/lib.rs (target/debug/deps/conductor_model-078ba0ae2bb59e1a)\n     Running unittests src/lib.rs (target/debug/deps/conductor_tui-7ab42ed3c486d7b7)\n     Running tests/headline_stats.rs (target/debug/deps/headline_stats-14ac0277788a85d2)\n   Doc-tests conductor_checks\n   Doc-tests conductor_engine\n   Doc-tests conductor_herdr\n   Doc-tests conductor_model\n   Doc-tests conductor_tui",
+            "reason": null
+          },
+          {
+            "argv": [
+              "cargo",
+              "test",
+              "--workspace",
+              "--message-format",
+              "json"
+            ],
+            "ended": "exited",
+            "exit_code": 0,
+            "duration_ms": 7943,
+            "stdout_truncated": false,
+            "stdout_sha256": "sha256:a93aed9d5d258aeeb2f1b8594204dad8828cb25b9d1532783b1ed4eb2b1c855f",
+            "stderr_sha256": "sha256:5d185d7218d87c01e715a64a3521e7932c1340c3bc8471074091d82a616bde46",
+            "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src/main.rs (target/debug/deps/conductor-b535a1fc79ddfc37)\n     Running tests/agent_panes.rs (target/debug/deps/agent_panes-538add971d1ee408)\n     Running tests/deliver.rs (target/debug/deps/deliver-2c507505a77e423e)\n     Running tests/observability.rs (target/debug/deps/observability-691a60561dd1a511)\n     Running tests/setup.rs (target/debug/deps/setup-63a4283d828bda76)\n     Running unittests src/lib.rs (target/debug/deps/conductor_checks-58f900709ce5fe35)\n     Running unittests src/lib.rs (target/debug/deps/conductor_engine-502ecdbd26f2e167)\n     Running tests/end_to_end.rs (target/debug/deps/end_to_end-8eb0965fe3c7c60a)\n     Running tests/headline_stats.rs (target/debug/deps/headline_stats-25e436d4261aea6e)\n     Running unittests src/lib.rs (target/debug/deps/conductor_herdr-144cf68128d4c0bc)\n     Running tests/contract.rs (target/debug/deps/contract-d9de8ac74b897430)\n     Running unittests src/lib.rs (target/debug/deps/conductor_model-078ba0ae2bb59e1a)\n     Running unittests src/lib.rs (target/debug/deps/conductor_tui-7ab42ed3c486d7b7)\n     Running tests/headline_stats.rs (target/debug/deps/headline_stats-14ac0277788a85d2)\n   Doc-tests conductor_checks\n   Doc-tests conductor_engine\n   Doc-tests conductor_herdr\n   Doc-tests conductor_model\n   Doc-tests conductor_tui",
+            "reason": null
+          }
+        ],
+        "assertions": [
+          {
+            "expr": "tests_failed == 0",
+            "run": 0,
+            "holds": true,
+            "observed": "0"
+          },
+          {
+            "expr": "tests_run > 0",
+            "run": 0,
+            "holds": true,
+            "observed": "164"
+          },
+          {
+            "expr": "tests_failed == 0",
+            "run": 1,
+            "holds": true,
+            "observed": "0"
+          },
+          {
+            "expr": "tests_run > 0",
+            "run": 1,
+            "holds": true,
+            "observed": "164"
+          }
+        ],
+        "tests": {
+          "compiled": true,
+          "compile_errors": 0,
+          "tests": [
+            {
+              "name": "setup::tests::the_starter_policy_parses",
+              "outcome": "passed"
+            },
+            {
+              "name": "setup::tests::the_starter_workflow_is_valid",
+              "outcome": "passed"
+            },
+            {
+              "name": "headline_stats_tests::repo_runs_stats_come_from_run_metrics_not_receipts",
+              "outcome": "passed"
+            },
+            {
+              "name": "an_agent_opens_a_pane_in_its_own_tab_and_nowhere_else",
+              "outcome": "passed"
+            },
+            {
+              "name": "headless_panes_are_background_processes_stopped_at_stage_end",
+              "outcome": "passed"
+            },
+            {
+              "name": "check_pr_says_so_when_a_branch_has_no_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_failed_run_is_not_delivered",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_passed_run_becomes_a_draft_pr_that_check_pr_accepts_until_it_changes",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_dead_collector_warns_but_does_not_fail_the_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_is_exported_and_its_trace_is_on_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "init_says_plainly_when_a_project_is_not_rust",
+              "outcome": "passed"
+            },
+            {
+              "name": "init_sets_up_a_rust_repository_once_and_keeps_what_is_there",
+              "outcome": "passed"
+            },
+            {
+              "name": "doctor_insists_workflows_are_committed",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_init_workflow_stops_a_tests_agent_that_implements_the_work",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_init_workflow_lets_tests_stub_new_code_and_passes_an_honest_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::an_unknown_name_is_an_error_not_false",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::mismatched_types_are_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::comparisons_between_facts_and_values",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::an_empty_list_satisfies_all_and_fails_any",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::prose_is_rejected",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::quantifiers_over_a_list",
+              "outcome": "passed"
+            },
+            {
+              "name": "assert::tests::the_observed_value_is_kept_for_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::a_real_red_run_is_read_test_by_test",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::output_with_no_build_messages_leaves_compiled_unknown",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::each_failure_is_classified_by_why_it_panicked",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::a_build_that_failed_reports_no_tests_and_its_errors",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::the_old_panic_format_is_read_too",
+              "outcome": "passed"
+            },
+            {
+              "name": "cargo_test::tests::the_message_stops_before_the_backtrace",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::file_nonempty_needs_real_content",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::mutation_of_no_change_is_unwitnessed",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::an_assertion_nobody_can_evaluate_is_unwitnessed_not_failed",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::a_flaky_test_is_flaky_not_passed",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::green_tests_pass_on_every_rerun",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::a_bad_revision_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::scope_passes_inside_and_fails_on_a_locked_file",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::a_clean_tree_has_no_changes",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::a_file_is_read_as_it_was_at_the_base",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::a_real_run_is_counted_and_scored",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::junk_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::no_viable_mutants_is_no_score_not_a_perfect_one",
+              "outcome": "passed"
+            },
+            {
+              "name": "mutants::tests::survivors_say_where_and_what_changed",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::a_loud_command_does_not_deadlock",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::a_missing_program_is_not_run_with_a_reason",
+              "outcome": "passed"
+            },
+            {
+              "name": "git::tests::edits_new_files_and_moves_all_count_as_changes",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::an_agent_keeps_its_credentials_but_not_its_parents_session",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::an_empty_command_is_refused",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::credentials_do_not_reach_the_command",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::exit_code_and_output_are_recorded",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::a_bad_pattern_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::a_lockfile_tooling_wrote_passes_but_is_reported",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::anything_else_is_outside_scope",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::changes_inside_scope_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::no_changes_is_a_pass_with_nothing_changed",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::protected_paths_are_named_as_such",
+              "outcome": "passed"
+            },
+            {
+              "name": "scope::tests::touching_the_locked_tests_fails_even_though_tests_are_writable",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::red_for_the_right_reason_is_told_apart_from_assert_false",
+              "outcome": "passed"
+            },
+            {
+              "name": "runner::tests::a_timeout_kills_the_whole_group",
+              "outcome": "passed"
+            },
+            {
+              "name": "gate::tests::mutation_scores_the_change_and_names_survivors",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::actions_read_as_plain_sentences",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::without_the_grant_pane_control_is_refused",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::open_panes_are_splits_not_yet_closed",
+              "outcome": "passed"
+            },
+            {
+              "name": "deliver::tests::github_remotes_name_their_repository",
+              "outcome": "passed"
+            },
+            {
+              "name": "deliver::tests::the_body_leads_with_the_verdict_and_carries_a_marker",
+              "outcome": "passed"
+            },
+            {
+              "name": "executor::tests::a_real_claude_stream_is_read",
+              "outcome": "passed"
+            },
+            {
+              "name": "executor::tests::resume_and_options_reach_the_command_line",
+              "outcome": "passed"
+            },
+            {
+              "name": "executor::tests::a_stream_without_a_result_did_not_finish",
+              "outcome": "passed"
+            },
+            {
+              "name": "herdr_exec::tests::agent_names_fit_herdrs_rules",
+              "outcome": "passed"
+            },
+            {
+              "name": "live::tests::the_title_is_the_first_line_without_heading_marks",
+              "outcome": "passed"
+            },
+            {
+              "name": "agent_panes::tests::a_garbled_log_line_is_skipped",
+              "outcome": "passed"
+            },
+            {
+              "name": "local_panes::tests::reading_keeps_the_last_lines",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::tests::a_real_run_is_counted",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::summary_tests::the_summary_reads_as_sentences",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::tests::no_attribute_names_the_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "metrics::tests::two_runs_add_up",
+              "outcome": "passed"
+            },
+            {
+              "name": "live::tests::a_run_whose_process_is_gone_is_not_shown_as_running",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::metrics_are_deltas_with_bucketed_durations",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::nothing_is_exported_without_an_endpoint",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::an_unreachable_collector_is_an_error_not_a_hang",
+              "outcome": "passed"
+            },
+            {
+              "name": "local_panes::tests::a_pane_runs_in_the_background_and_is_stopped",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::the_bodies_have_the_otlp_shape",
+              "outcome": "passed"
+            },
+            {
+              "name": "store::tests::recorded_events_read_back_and_verify",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::a_run_is_sent_as_traces_then_logs",
+              "outcome": "passed"
+            },
+            {
+              "name": "trace::tests::a_real_run_becomes_stages_attempts_agents_and_checks",
+              "outcome": "passed"
+            },
+            {
+              "name": "otlp::tests::what_agents_did_is_summarised_unless_content_capture_is_on",
+              "outcome": "passed"
+            },
+            {
+              "name": "trace::tests::ids_are_stable_and_the_right_size",
+              "outcome": "passed"
+            },
+            {
+              "name": "transcript::tests::the_project_directory_is_the_cwd_with_separators_replaced",
+              "outcome": "passed"
+            },
+            {
+              "name": "trace::tests::the_tree_renders_with_durations_and_failures",
+              "outcome": "passed"
+            },
+            {
+              "name": "transcript::tests::usage_is_counted_once_per_message_and_tools_are_observed",
+              "outcome": "passed"
+            },
+            {
+              "name": "store::tests::run_ids_are_distinct_and_sortable",
+              "outcome": "passed"
+            },
+            {
+              "name": "transcript::tests::the_newest_log_since_the_attempt_started_is_read",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_in_herdr_gets_a_tab_and_closes_each_passed_stages_pane",
+              "outcome": "passed"
+            },
+            {
+              "name": "an_implementer_that_edits_the_locked_tests_never_passes",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_lockfile_rewritten_by_tooling_is_allowed_and_named_on_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_retries_fresh_after_failing_tests_and_passes_with_a_verifiable_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_workflow_is_read_from_the_base_not_the_working_tree",
+              "outcome": "passed"
+            },
+            {
+              "name": "tampering_with_the_stored_record_is_caught",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_policy_can_turn_lockfile_allowance_off",
+              "outcome": "passed"
+            },
+            {
+              "name": "the_live_view_ends_with_the_runs_verdict_and_every_stage",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_without_a_receipt_is_not_recorded",
+              "outcome": "passed"
+            },
+            {
+              "name": "an_empty_runs_directory_is_none",
+              "outcome": "passed"
+            },
+            {
+              "name": "no_conductor_directory_at_all_is_none",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_with_no_finished_attempts_shows_a_dash_for_the_catch_rate",
+              "outcome": "passed"
+            },
+            {
+              "name": "labels_are_the_documented_ones",
+              "outcome": "passed"
+            },
+            {
+              "name": "one_recorded_run_matches_the_documented_example",
+              "outcome": "passed"
+            },
+            {
+              "name": "two_recorded_runs_are_merged_before_the_stats_are_derived",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::ids_are_read_from_nested_results",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::nothing_conductor_did_not_create_can_be_closed",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::states_map_and_ready_means_idle_or_done",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::server_errors_are_read_from_json",
+              "outcome": "passed"
+            },
+            {
+              "name": "tests::a_missing_binary_says_so",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_run_tab_with_a_pane_that_runs_a_command_and_is_read_back",
+              "outcome": "passed"
+            },
+            {
+              "name": "a_server_error_comes_back_with_herdrs_code",
+              "outcome": "passed"
+            },
+            {
+              "name": "conductor_refuses_to_close_what_it_did_not_open",
+              "outcome": "passed"
+            },
+            {
+              "name": "demo::tests::the_evidence_feed_keeps_only_its_latest_lines",
+              "outcome": "passed"
+            },
+            {
+              "name": "demo::tests::the_demo_receipt_passes_on_its_own_rows",
+              "outcome": "passed"
+            },
+            {
+              "name": "demo::tests::the_demo_run_finishes_after_its_last_step",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::a_rehashed_event_still_breaks_the_next_link",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::deleting_an_event_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::an_untouched_chain_verifies_to_its_head",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::editing_an_event_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::events_round_trip_through_json",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::only_witnessed_facts_count_as_proof",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::the_empty_chain_verifies_to_genesis",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::a_check_that_never_ran_keeps_the_run_from_passing",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::a_failure_outranks_everything_after_it",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::all_witnessed_passes_make_a_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "evidence::tests::relabelling_a_guess_as_proof_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::a_pass_nobody_witnessed_fails_the_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::flaky_is_never_a_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::an_override_is_visible_in_the_verdict",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_misspelt_field_is_rejected_not_ignored",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_mutation_score_above_one_is_rejected",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_dependency_loop_is_found",
+              "outcome": "passed"
+            },
+            {
+              "name": "receipt::tests::no_checks_is_not_a_pass",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_script_agent_needs_a_command",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_reference_to_a_missing_output_is_named",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_scope_gate_without_a_write_scope_is_an_error",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::a_timeout_herdr_would_reject_is_caught_before_the_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::templates_render_to_real_paths_for_a_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::later_kinds_say_when_they_arrive",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::freezing_a_path_the_stage_may_write_is_a_contradiction",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::an_unknown_dependency_is_named",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::the_same_agent_writing_and_implementing_is_called_out",
+              "outcome": "passed"
+            },
+            {
+              "name": "workflow::tests::the_shipped_example_is_valid",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::a_run_in_progress_is_listed_first_and_opens_live",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::number_keys_switch_screens",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::r_opens_the_receipt_from_every_screen",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::enter_opens_a_running_run_live_and_a_finished_one_as_a_receipt",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::real_runs_open_their_own_receipts",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::the_demo_only_advances_while_you_watch",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::starting_a_run_restarts_the_live_view",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::selection_stays_inside_the_list",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::ticks_keep_the_selection_on_the_same_run",
+              "outcome": "passed"
+            },
+            {
+              "name": "app::tests::typing_a_spec_path_does_not_trigger_shortcuts",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_launch_screen_asks_three_questions",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_live_screen_offers_the_receipt_when_done",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::a_failed_headless_run_says_so_and_offers_no_herdr_tab",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_live_screen_shows_checks_evidence_and_panes",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_runs_screen_shows_the_list_and_who_needs_you",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::the_receipt_screen_leads_with_the_verdict_and_what_was_proven",
+              "outcome": "passed"
+            },
+            {
+              "name": "ui::tests::every_screen_draws_in_a_small_terminal_without_panicking",
+              "outcome": "passed"
+            },
+            {
+              "name": "tick_re_reads_the_sources_stats_rather_than_caching_them",
+              "outcome": "passed"
+            },
+            {
+              "name": "tick_keeps_showing_the_sources_stats",
+              "outcome": "passed"
+            },
+            {
+              "name": "from_source_prefers_the_sources_own_stats_over_receipt_derived_ones",
+              "outcome": "passed"
+            }
+          ]
+        }
+      },
+      {
+        "gate": "mutation",
+        "verdict": "passed",
+        "detail": "caught 1 of 1 injected bugs · 1.00, needs 0.60",
+        "executions": [
+          {
+            "argv": [
+              "cargo",
+              "mutants",
+              "--no-shuffle",
+              "--output",
+              "/root/Development/conductor/.conductor/runs/0MUFGO8G219/scratch/implement-1/2/mutants",
+              "--in-diff",
+              "/root/Development/conductor/.conductor/runs/0MUFGO8G219/scratch/implement-1/2/stage.diff"
+            ],
+            "ended": "exited",
+            "exit_code": 0,
+            "duration_ms": 34086,
+            "stdout_truncated": false,
+            "stdout_sha256": "sha256:fc25b0947aadca2f79ae1cb0c9ff6011889fc47cf21f3e4677fe7e78a230e301",
+            "stderr_sha256": "sha256:3efedc732c5922993de0280cb64f0c96e0c12b1a5f307c247288adf3a78870c5",
+            "stderr_tail": " INFO Auto-set test timeout to 20s",
+            "reason": null
+          }
+        ],
+        "mutation": {
+          "caught": 1,
+          "missed": 0,
+          "timeout": 0,
+          "unviable": 4,
+          "survivors": [],
+          "tool_version": "27.1.0"
+        }
+      }
+    ],
+    "tool_calls": 35,
+    "turns": 36,
+    "tokens": 2195840,
+    "cost_usd": 0.6912801999999998,
+    "model": "claude-sonnet-5",
+    "notes": [],
+    "declared": [
+      "scope",
+      "command_assert",
+      "mutation"
+    ]
+  }
+]

@@ -1,0 +1,78 @@
+{
+  "run_id": "0MUFGO8G219",
+  "work": "Runs-screen headline numbers from run metrics",
+  "kind": "build",
+  "checks": [
+    {
+      "claim": "Only allowed files changed (tests)",
+      "verdict": "passed",
+      "detail": "5 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests failed before the change, for the right reason",
+      "verdict": "passed",
+      "detail": "153 passed, 11 failed; every assertion held",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Only allowed files changed (implement)",
+      "verdict": "passed",
+      "detail": "3 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests pass after the change, on every run",
+      "verdict": "passed",
+      "detail": "164 passed, 0 failed; every assertion held on all 2 runs",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests catch injected bugs",
+      "verdict": "passed",
+      "detail": "caught 1 of 1 injected bugs · 1.00, needs 0.60",
+      "source": "witnessed"
+    }
+  ],
+  "survivors": [],
+  "not_checked": [
+    "the agent could read the whole machine: no sandbox"
+  ],
+  "how": [
+    [
+      "stages",
+      "tests · claude → implement · claude"
+    ],
+    [
+      "where",
+      "headless · worktree branch conductor/0MUFGO8G219"
+    ],
+    [
+      "agent actions",
+      "79 tool calls observed · 81 turns"
+    ],
+    [
+      "tokens",
+      "5720794 measured · $2.17"
+    ],
+    [
+      "wall clock",
+      "10m15s"
+    ],
+    [
+      "trace",
+      "5c4a7bb17eda25e53310ee1257f8bdc3 · `conductor trace 0MUFGO8G219`"
+    ]
+  ],
+  "integrity": {
+    "chain_head": "sha256:8fd3619625dc7999192334fb143d08b8e7ecbb622fbd9e9a36392141276200e2",
+    "anchored_in": "c102fac758a3",
+    "signed": false,
+    "reproduces": true,
+    "trace_id": null
+  },
+  "also_at": [
+    ".conductor/runs/0MUFGO8G219/receipt.json",
+    "conductor receipt 0MUFGO8G219"
+  ]
+}
