@@ -18,7 +18,7 @@ stages:
   - id: tests
     agent:
       kind: claude
-      allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)", "Bash(cargo check:*)"]
+      allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)", "Bash(cargo check:*)", "Bash(cargo clippy:*)", "Bash(cargo fmt:*)"]
     prompt_file: .conductor/prompts/tests.md
     scope: { write: ["crates/*/tests/**", "crates/*/src/**", "src/**"] }
     gates:
