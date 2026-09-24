@@ -254,6 +254,59 @@ fn the_live_view_ends_with_the_runs_verdict_and_every_stage() {
     assert!(conductor_engine::live::running(d.path()).is_empty());
 }
 
+/// An exit-code check (a formatter, a linter) fails the first try; the retry must be told
+/// what the command printed, or it could not know what to fix.
+#[test]
+fn an_exit_check_sends_its_output_back_to_the_agent() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    fs::create_dir_all(p.join(".conductor/workflows")).unwrap();
+    fs::write(
+        p.join(".gitignore"),
+        "/.conductor/runs/\n/.test-conductor-home/\n",
+    )
+    .unwrap();
+    let agent = r#"mkdir -p notes; if echo "$CONDUCTOR_PROMPT" | grep -q 'expected ok, found no'; then echo ok > notes/out.md; else echo no > notes/out.md; fi"#;
+    let check =
+        r#"grep -qx ok notes/out.md || { echo "expected ok, found $(cat notes/out.md)"; exit 1; }"#;
+    fs::write(
+        p.join(".conductor/workflows/build.yaml"),
+        format!(
+            r#"id: fmt
+version: 1
+kind: build
+defaults:
+  retries: {{ max: 1, ladder: [in_context] }}
+stages:
+  - id: write
+    agent: {{ kind: script, command: ["sh", "-c", {agent:?}] }}
+    scope: {{ write: ["notes/**"] }}
+    gates:
+      - {{ type: command_assert, command: ["sh", "-c", {check:?}], parser: exit }}
+"#
+        ),
+    )
+    .unwrap();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "t"]);
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "base"]);
+    let out = run(options(p)).expect("run completes");
+    assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    assert!(
+        out.receipt.checks[0].claim.contains("succeeds (write)"),
+        "{:?}",
+        out.receipt.checks
+    );
+    let events = out.dir.read_events().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.what == "attempt 2: in-context retry with script")
+    );
+}
+
 #[test]
 fn a_workflow_is_read_from_the_base_not_the_working_tree() {
     let d = repo(WRONG_THEN_RIGHT);

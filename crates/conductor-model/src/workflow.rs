@@ -388,6 +388,8 @@ impl Gate {
 pub enum Parser {
     CargoJson,
     JunitXml,
+    /// No output is read: the command must exit 0 (a formatter or linter check).
+    Exit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -674,10 +676,19 @@ impl Workflow {
                     }
                 }
                 Gate::CommandAssert {
-                    command, reruns, ..
+                    command,
+                    reruns,
+                    parser,
+                    assert,
                 } => {
                     if command.is_empty() || command[0].trim().is_empty() {
                         r.error(format!("{gat}.command"), "must name a program to run");
+                    }
+                    if *parser == Parser::Exit && !assert.is_empty() {
+                        r.error(
+                            format!("{gat}.assert"),
+                            "`parser: exit` passes when the command exits 0 and takes no assertions",
+                        );
                     }
                     if *reruns > 10 {
                         r.warn(

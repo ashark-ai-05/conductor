@@ -68,6 +68,10 @@ stages:
         assert: ["tests_failed == 0", "tests_run > 0", "tests_new == 0"]
       # Bugs injected into the changed code must be caught by the tests.
       - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.6 }
+      # If your CI requires formatting and lints, check them here too, so a run can't
+      # pass what CI would fail (the repository must already be clean at its base):
+      # - { type: command_assert, command: ["cargo", "fmt", "--all", "--check"], parser: exit }
+      # - { type: command_assert, command: ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"], parser: exit }
 "#;
 
 const TESTS_PROMPT: &str = "\

@@ -84,6 +84,9 @@ impl StageRecord {
 
 /// A claim a reviewer understands, for one gate of one stage.
 fn claim(wf: &Workflow, stage: &str, g: &GateResult) -> String {
+    if let Some(c) = &g.claim {
+        return format!("{c} ({stage})");
+    }
     let asserts: Vec<&str> = g.assertions.iter().map(|a| a.expr.as_str()).collect();
     match g.gate {
         "scope" => format!("Only allowed files changed ({stage})"),

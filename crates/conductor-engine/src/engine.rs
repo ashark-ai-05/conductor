@@ -161,7 +161,11 @@ fn describe_gate(g: &Gate) -> String {
             } else {
                 String::new()
             };
-            format!("`{}`{runs}: {}", command.join(" "), assert.join("; "))
+            if assert.is_empty() {
+                format!("`{}` exits 0{runs}", command.join(" "))
+            } else {
+                format!("`{}`{runs}: {}", command.join(" "), assert.join("; "))
+            }
         }
         Gate::Mutation { min_score, .. } => format!(
             "mutation testing of your change catches at least {:.0}% of injected bugs",
@@ -260,6 +264,21 @@ fn feedback(r: &GateResult) -> String {
                     .next()
                     .unwrap_or("")
             ));
+        }
+    }
+    // A check with no test report (a formatter, a linter) explains itself in its output.
+    if r.tests.is_none()
+        && r.scope.is_none()
+        && r.mutation.is_none()
+        && let Some(e) = r.executions.last()
+    {
+        let out = format!("{}\n{}", e.stdout_text(), e.stderr_tail);
+        let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+        if !lines.is_empty() {
+            f.push_str("Its output ended with:\n");
+            for l in &lines[lines.len().saturating_sub(30)..] {
+                f.push_str(&format!("    {l}\n"));
+            }
         }
     }
     if let Some(m) = &r.mutation {
