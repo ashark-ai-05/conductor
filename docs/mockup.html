@@ -1,0 +1,650 @@
+<title>Conductor TUI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --page:#e9edf1; --chrome:#dce2e8; --term:#fbfcfd; --panel:#f1f4f7; --line:#cfd6de; --line-strong:#9aa6b3;
+  --text:#1c2430; --dim:#5f6a7a; --faint:#8f9aa8;
+  --accent:#3552cc; --accent-ink:#ffffff; --sel:#e2e8fb;
+  --pass:#1b8048; --fail:#c2363c; --warn:#9a6300; --run:#3552cc; --blocked:#b0306e;
+  --pass-bg:#e1f2e8; --fail-bg:#fbe5e6; --warn-bg:#f8eed9; --run-bg:#e2e8fb; --blocked-bg:#f8e3ee;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --page:#090c10; --chrome:#141920; --term:#0f1318; --panel:#151a21; --line:#29313b; --line-strong:#46515e;
+    --text:#d8dfe8; --dim:#8a97a7; --faint:#5b6674;
+    --accent:#8ea5ff; --accent-ink:#0d1220; --sel:#1c2436;
+    --pass:#72c98f; --fail:#f07d7d; --warn:#e3b560; --run:#8ea5ff; --blocked:#f08bbd;
+    --pass-bg:#15291e; --fail-bg:#2e1719; --warn-bg:#2b2413; --run-bg:#1a2238; --blocked-bg:#2c1823;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --page:#090c10; --chrome:#141920; --term:#0f1318; --panel:#151a21; --line:#29313b; --line-strong:#46515e;
+  --text:#d8dfe8; --dim:#8a97a7; --faint:#5b6674;
+  --accent:#8ea5ff; --accent-ink:#0d1220; --sel:#1c2436;
+  --pass:#72c98f; --fail:#f07d7d; --warn:#e3b560; --run:#8ea5ff; --blocked:#f08bbd;
+  --pass-bg:#15291e; --fail-bg:#2e1719; --warn-bg:#2b2413; --run-bg:#1a2238; --blocked-bg:#2c1823;
+}
+*{box-sizing:border-box}
+html,body{background:var(--page);color:var(--text)}
+body{font-family:var(--sans);font-size:14px;padding-inline:16px;padding-block:20px 40px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+[hidden]{display:none!important}
+
+/* page chrome */
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+.top h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.top p{margin:4px 0 0;color:var(--dim);font-size:13px;max-width:66ch}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--term)}
+.seg button{font:500 13px var(--sans);color:var(--dim);background:none;border:0;padding:7px 12px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* terminal */
+.term{font-family:var(--mono);font-size:13.5px;line-height:1.6;background:var(--term);border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;box-shadow:0 18px 40px -24px rgba(10,20,40,.45)}
+.titlebar{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--chrome);border-bottom:1px solid var(--line);color:var(--dim);font-size:12px}
+.dots{display:flex;gap:6px}.dots i{width:10px;height:10px;border-radius:50%;background:var(--line-strong);display:block}
+.hbar{display:flex;align-items:stretch;background:var(--panel);border-bottom:1px solid var(--line);font-size:12.5px;overflow-x:auto;white-space:nowrap}
+.hbar .brand{padding:4px 10px;background:var(--text);color:var(--term);font-weight:700;display:flex;align-items:center}
+.htab{font:inherit;color:var(--dim);background:none;border:0;border-right:1px solid var(--line);padding:4px 14px;cursor:pointer}
+.htab[aria-selected="true"]{color:var(--text);background:var(--term);box-shadow:inset 0 -2px 0 var(--accent)}
+.htab .by{color:var(--faint);font-size:11px;margin-left:6px}
+.hbar .sp{flex:1}
+.hbar .hstat{padding:4px 12px;color:var(--dim);display:flex;align-items:center;gap:8px}
+.body{display:grid;grid-template-columns:26ch minmax(0,1fr);min-height:600px}
+@media (max-width:820px){.body{grid-template-columns:minmax(0,1fr)}.sidebar{display:none}}
+.pane{min-width:0;display:flex;flex-direction:column;border-left:1px solid var(--line)}
+.body>.pane:first-child{border-left:0}
+.pane-h{display:flex;justify-content:space-between;gap:8px;padding:3px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line);background:var(--panel);white-space:nowrap;overflow:hidden}
+.pane-h b{color:var(--text);font-weight:500}
+.pane.focus>.pane-h{background:var(--accent);color:var(--accent-ink)}
+.pane.focus>.pane-h b{color:var(--accent-ink)}
+
+/* herdr sidebar */
+.sidebar .list{padding:10px 0;display:flex;flex-direction:column;gap:2px}
+.grp{padding:6px 12px 2px;color:var(--faint);font-size:11px;letter-spacing:.08em}
+.agent{display:grid;grid-template-columns:2ch 1fr;padding:3px 12px;gap:0 6px;font-size:12.5px}
+.agent .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent .sub{grid-column:2;color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent.mine{background:var(--sel)}
+.g-working{color:var(--run)}.g-done{color:var(--pass)}.g-idle{color:var(--faint)}.g-blocked{color:var(--blocked)}
+
+/* conductor app */
+.app{flex:1;display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;align-items:center;gap:4px;padding:8px 14px 0;border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
+.tab{font:inherit;color:var(--dim);background:none;border:0;padding:4px 12px 7px;cursor:pointer;border-bottom:2px solid transparent}
+.tab .k{color:var(--faint);margin-right:6px}
+.tab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+.tabs .sp{flex:1}
+.tabs .meta{color:var(--faint);font-size:12px;padding-left:12px}
+.screen{flex:1;padding:18px 20px 16px;display:flex;flex-direction:column;gap:18px;min-width:0}
+.lead{color:var(--dim);margin:0;max-width:74ch}
+.lead b{color:var(--text);font-weight:500}
+.keys{display:flex;flex-wrap:wrap;gap:6px 18px;padding:7px 16px;border-top:1px solid var(--line);background:var(--panel);color:var(--dim);font-size:12px}
+.keys kbd{font:inherit;color:var(--text);background:var(--term);border:1px solid var(--line);border-radius:3px;padding:0 6px;margin-right:6px}
+.keys .hot kbd{border-color:var(--accent);color:var(--accent)}
+.keys .hot{color:var(--text)}
+
+/* block */
+.block{position:relative;border:1px solid var(--line);border-radius:7px;padding:16px 16px 14px;min-width:0}
+.block>.bt{position:absolute;top:-.85em;left:12px;padding:0 7px;background:var(--term);color:var(--dim);font-size:12px;white-space:nowrap}
+.block>.bt b{color:var(--text);font-weight:600}
+.block.hot{border-color:var(--accent)}
+.block.hot>.bt{color:var(--accent)}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+@media (max-width:1000px){.grid2{grid-template-columns:minmax(0,1fr)}}
+
+.pill{display:inline-block;padding:0 7px;border-radius:3px;font-size:12px;font-weight:500;white-space:nowrap}
+.p-pass{color:var(--pass);background:var(--pass-bg)}.p-fail{color:var(--fail);background:var(--fail-bg)}
+.p-warn{color:var(--warn);background:var(--warn-bg)}.p-run{color:var(--run);background:var(--run-bg)}
+.p-blocked{color:var(--blocked);background:var(--blocked-bg)}.p-dim{color:var(--dim);background:var(--panel)}
+.c-pass{color:var(--pass)}.c-fail{color:var(--fail)}.c-warn{color:var(--warn)}.c-run{color:var(--run)}.c-dim{color:var(--dim)}.c-faint{color:var(--faint)}.c-blocked{color:var(--blocked)}
+.num{font-variant-numeric:tabular-nums}
+code{font-family:var(--mono);font-size:.95em;background:var(--panel);padding:0 5px;border-radius:3px}
+
+.linkbtn{font:inherit;color:var(--accent);background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:3px}
+.btn{font:inherit;font-weight:700;border-radius:5px;padding:4px 14px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink)}
+.btn.ghost{background:none;color:var(--text);border-color:var(--line-strong);font-weight:500}
+.btn .k{opacity:.7;font-weight:400;margin-left:6px}
+
+/* runs */
+.stats{display:flex;flex-wrap:wrap;gap:10px 40px}
+.stat .v{font-size:18px;font-weight:700}
+.stat .l{color:var(--dim);font-size:12px}
+.spark{display:inline-block;vertical-align:middle;margin-left:8px}
+.needs{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:10px 14px;border:1px solid var(--blocked);border-left-width:3px;border-radius:5px;background:var(--blocked-bg)}
+.tablewrap{overflow-x:auto}
+table{font-size:inherit;border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th{font-weight:500;color:var(--faint);text-align:left;padding:4px 12px;font-size:11px;letter-spacing:.08em;white-space:nowrap}
+td{padding:9px 12px;white-space:nowrap;border-top:1px solid var(--line)}
+td .id{color:var(--faint);font-size:12px;margin-left:8px}
+.row{cursor:pointer}
+.row:hover td{background:var(--panel)}
+.row.sel td{background:var(--sel)}
+.row.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.bar{display:inline-flex;gap:3px;vertical-align:middle}
+.bar i{width:9px;height:10px;border-radius:2px;background:var(--line);display:block}
+.bar i.ok{background:var(--pass)}.bar i.no{background:var(--fail)}.bar i.go{background:var(--run)}.bar i.fl{background:var(--warn)}
+
+/* live */
+.runhead{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 18px}
+.runhead h2{font:700 15px var(--mono);margin:0}
+.runhead h2 span{color:var(--faint);font-weight:400;margin-left:8px;font-size:13px}
+.runhead .acts{display:flex;flex-wrap:wrap;gap:8px}
+.pipe{display:flex;flex-wrap:wrap;align-items:stretch;gap:0}
+.stage{border:1px solid var(--line);border-radius:6px;padding:8px 14px;min-width:19ch}
+.stage .n{font-weight:700}
+.stage .d{color:var(--dim);font-size:12px}
+.stage.done{border-color:color-mix(in srgb,var(--pass) 45%,var(--line))}
+.stage.now{border-color:var(--run);background:var(--run-bg)}
+.stage.wait{border-style:dashed;color:var(--dim)}
+.link{align-self:center;color:var(--faint);padding:0 8px}
+.checks{display:grid;grid-template-columns:2ch 10ch minmax(0,1fr);gap:8px 10px;align-items:baseline}
+.checks .d{color:var(--dim);min-width:0}
+.prog{display:inline-block;width:14ch;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;overflow:hidden;margin-left:8px}
+.prog i{display:block;height:100%;background:var(--run);transition:width .4s}
+.note-line{margin-top:12px;color:var(--dim);font-size:12.5px}
+.log{display:grid;grid-template-columns:9ch 10ch minmax(0,1fr);gap:6px 10px;font-size:12.5px}
+.log .t{color:var(--faint)}
+.src{font-size:11.5px}
+.s-observed{color:var(--run)}.s-measured{color:var(--pass)}.s-witnessed{color:var(--text);font-weight:700}.s-inferred{color:var(--warn)}
+.ready{display:none;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:10px 14px;border:1px solid var(--pass);border-left-width:3px;border-radius:5px;background:var(--pass-bg)}
+.ready.on{display:flex}
+.layout{display:flex;flex-wrap:wrap;gap:10px}
+.mini{border:1px solid var(--line);border-radius:5px;padding:6px 12px;min-width:16ch;font-size:12.5px}
+.mini .s{color:var(--dim);font-size:11.5px}
+.mini.open{border-color:var(--run)}
+.mini.closed{border-style:dashed;color:var(--dim)}
+
+/* receipt */
+.verdict{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:14px 16px;border-radius:7px;background:var(--pass-bg);border:1px solid color-mix(in srgb,var(--pass) 40%,transparent)}
+.verdict .big{font-weight:700;color:var(--pass);letter-spacing:.1em;font-size:15px}
+.kv{display:grid;grid-template-columns:13ch minmax(0,1fr);gap:6px 12px;font-size:13px}
+.kv dt{color:var(--dim)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+ul.plain{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.mut .at{color:var(--dim)}
+.reach{display:flex;flex-wrap:wrap;gap:6px 22px;color:var(--dim);font-size:12.5px}
+
+/* launch */
+.steps{display:flex;flex-direction:column;gap:22px}
+.step{display:grid;grid-template-columns:3ch minmax(0,1fr);gap:4px 10px}
+.step .no{color:var(--accent);font-weight:700}
+.step .q{font-weight:700}
+.step .body2{grid-column:2;display:flex;flex-direction:column;gap:8px}
+.opts{display:flex;flex-wrap:wrap;gap:8px 20px}
+.opt{font:inherit;color:var(--text);background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.opt .r{color:var(--faint)}
+.opt[aria-checked="true"] .r{color:var(--accent)}
+.opt[disabled]{color:var(--faint);cursor:not-allowed}
+.opt .v{font-size:11px;color:var(--faint);margin-left:6px}
+.hint{color:var(--dim);font-size:12.5px}
+.field{width:100%;max-width:44ch;font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:4px 10px}
+.field:focus{outline:2px solid var(--accent);outline-offset:1px}
+details.more{color:var(--dim);font-size:12.5px}
+details.more summary{cursor:pointer;color:var(--text)}
+details.more div{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+
+/* run tab (herdr view) */
+.runtab{display:grid;grid-template-columns:34ch minmax(0,1fr);min-height:600px}
+@media (max-width:900px){.runtab{grid-template-columns:minmax(0,1fr)}}
+.side{padding:16px 16px;display:flex;flex-direction:column;gap:16px}
+.side h3{font:700 14px var(--mono);margin:0}
+.side .sub{color:var(--dim);font-size:12px}
+.vstages{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.vstages .s{color:var(--dim);font-size:12px;margin-left:3ch;display:block}
+.agents{display:grid;grid-template-rows:minmax(0,1fr);grid-auto-rows:minmax(0,auto)}
+.agents.two{grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+.agents .pane{border-left:1px solid var(--line)}
+.agents .pane+.pane{border-top:1px solid var(--line)}
+.out{padding:12px 14px;display:flex;flex-direction:column;gap:5px;font-size:13px}
+.out .tool{color:var(--run)}.out .ok{color:var(--pass)}
+.ask{margin:4px 14px 12px;padding:10px 12px;border:1px solid var(--blocked);border-radius:5px;background:var(--blocked-bg)}
+.closedrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+.toast{align-self:flex-start;padding:6px 12px;border-radius:5px;background:var(--panel);border:1px solid var(--line);color:var(--dim);font-size:12.5px}
+
+/* notes */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.note{background:var(--term);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.note h2{font-size:13px;font-weight:600;margin:0 0 8px}
+.note ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:13px;line-height:1.45}
+.note b{color:var(--text);font-weight:500}
+.legend{display:grid;grid-template-columns:3ch 1fr;gap:4px 6px;font-family:var(--mono);font-size:12.5px}
+.legend span:nth-child(even){font-family:var(--sans);color:var(--dim);font-size:13px}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.prog i{transition:none}.pulse{animation:none}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Conductor — terminal UI mockup v3</h1>
+      <p>Conductor runs in herdr tab 1. Each run it starts gets its own herdr tab, with one pane per active stage. Click the herdr tabs along the top of the terminal, or use the buttons here. All data is sample data.</p>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" data-view="runs" aria-pressed="true">Runs</button>
+        <button type="button" data-view="live" aria-pressed="false">Live run</button>
+        <button type="button" data-view="receipt" aria-pressed="false">Receipt</button>
+        <button type="button" data-view="launch" aria-pressed="false">Launch</button>
+        <button type="button" data-view="tab2" aria-pressed="false">Run's herdr tab</button>
+      </div>
+      <div class="seg" role="group" aria-label="Theme">
+        <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
+        <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="term" aria-label="Terminal mockup">
+    <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><span>herdr — ~/src/settlement</span></div>
+    <div class="hbar" role="tablist" aria-label="herdr tabs">
+      <span class="brand">herdr</span>
+      <button class="htab" role="tab" data-view="runs" data-htab="1" aria-selected="true">1 conductor</button>
+      <button class="htab" role="tab" data-view="tab2" data-htab="2" aria-selected="false"><span class="g-working" id="ht2g">◐</span> 2 PTT-1234<span class="by">by conductor</span></button>
+      <button class="htab" role="tab" data-view="tab3" data-htab="3" aria-selected="false"><span class="g-blocked">◆</span> 3 PTT-1229<span class="by">by conductor</span></button>
+      <button class="htab" role="tab" data-view="tab4" data-htab="4" aria-selected="false"><span class="g-working">◐</span> 4 PTT-1238<span class="by">by conductor</span></button>
+      <span class="sp"></span>
+      <span class="hstat"><span class="g-blocked">◆1</span><span class="g-working">◐2</span></span>
+    </div>
+
+    <!-- HERDR TAB 1: conductor -->
+    <div class="body" id="tab-conductor">
+      <div class="pane sidebar">
+        <div class="pane-h"><b>agents</b><span>herdr</span></div>
+        <div class="list">
+          <div class="grp">TAB 2 · PTT-1234</div>
+          <div class="agent mine"><span class="g-working pulse" id="sb-g">◐</span><span class="who">claude · implement</span><span class="sub" id="sb-s">attempt 2</span></div>
+          <div class="grp">TAB 3 · PTT-1229</div>
+          <div class="agent"><span class="g-blocked">◆</span><span class="who">claude · implement</span><span class="sub">has a question</span></div>
+          <div class="grp">TAB 4 · PTT-1238</div>
+          <div class="agent"><span class="g-working">◐</span><span class="who">codex · tests</span><span class="sub">writing tests</span></div>
+        </div>
+      </div>
+
+      <div class="pane focus">
+        <div class="pane-h"><b>conductor</b><span>tab 1</span></div>
+        <div class="app">
+          <div class="tabs" role="tablist" aria-label="conductor screens">
+            <button class="tab" role="tab" data-view="runs" aria-selected="true"><span class="k">1</span>runs</button>
+            <button class="tab" role="tab" data-view="live" aria-selected="false"><span class="k">2</span>live</button>
+            <button class="tab" role="tab" data-view="receipt" aria-selected="false"><span class="k">3</span>receipt</button>
+            <button class="tab" role="tab" data-view="launch" aria-selected="false"><span class="k">4</span>launch</button>
+            <span class="sp"></span>
+            <span class="meta">herdr <span class="c-pass">✓</span> · traces → Tempo</span>
+          </div>
+
+          <!-- RUNS -->
+          <div class="screen" data-screen="runs">
+            <p class="lead">Every run gets its own herdr tab while it's working. <b>Enter</b> opens a run; <b>r</b> opens its receipt.</p>
+            <div class="stats">
+              <div class="stat"><div class="v num">3 running</div><div class="l">in herdr tabs 2–4</div></div>
+              <div class="stat"><div class="v num">17%<svg class="spark" width="64" height="16" viewBox="0 0 64 16" aria-hidden="true"><polyline fill="none" stroke="var(--run)" stroke-width="1.5" points="1,12 10,11 19,13 28,9 37,10 46,7 55,8 63,5"/><circle cx="63" cy="5" r="2" fill="var(--run)"/></svg></div><div class="l">caught: the agent said done, a check said no</div></div>
+              <div class="stat"><div class="v num">23</div><div class="l">runs in the last 7 days</div></div>
+            </div>
+            <div class="needs"><span class="pill p-blocked">◆ needs you</span><span>PTT-1229: claude wants to edit <code>Cargo.lock</code>, which is protected</span><button class="linkbtn" type="button" data-view="tab3">answer in tab 3</button></div>
+            <div class="block">
+              <span class="bt"><b>runs</b> · newest first</span>
+              <div class="tablewrap">
+                <table>
+                  <thead><tr><th>WORK</th><th>STATUS</th><th>CHECKS</th><th>WHERE</th><th>RECEIPT</th></tr></thead>
+                  <tbody id="runrows">
+                    <tr class="row sel" tabindex="0" data-open="live"><td>PTT-1234 add --json to status<span class="id">01JBXQ7</span></td><td><span class="pill p-run">◐ running</span></td><td><span class="bar"><i class="ok"></i><i class="ok"></i><i class="go"></i><i></i><i></i></span></td><td>herdr tab 2</td><td><button class="linkbtn" type="button" data-view="receipt">so far</button></td></tr>
+                    <tr class="row" tabindex="0" data-open="tab3"><td>PTT-1229 retry backoff<span class="id">01JBXN9</span></td><td><span class="pill p-blocked">◆ needs you</span></td><td><span class="bar"><i class="ok"></i><i class="ok"></i><i class="go"></i><i></i><i></i></span></td><td>herdr tab 3</td><td><button class="linkbtn" type="button" data-view="receipt">so far</button></td></tr>
+                    <tr class="row" tabindex="0" data-open="tab4"><td>PTT-1238 holiday calendar<span class="id">01JBXR1</span></td><td><span class="pill p-run">◐ running</span></td><td><span class="bar"><i class="ok"></i><i class="go"></i><i></i><i></i><i></i></span></td><td>herdr tab 4</td><td><button class="linkbtn" type="button" data-view="receipt">so far</button></td></tr>
+                    <tr class="row" tabindex="0" data-open="receipt"><td>PTT-1231 ledger rounding<span class="id">01JBXP2</span></td><td><span class="pill p-pass">✓ passed</span></td><td><span class="bar"><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i></span></td><td class="c-dim">tab closed</td><td><button class="linkbtn" type="button" data-view="receipt">open</button></td></tr>
+                    <tr class="row" tabindex="0" data-open="receipt"><td>nightly: bump serde<span class="id">01JBXK1</span></td><td><span class="pill p-pass">✓ passed</span></td><td><span class="bar"><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i></span></td><td class="c-dim">headless · CI</td><td><button class="linkbtn" type="button" data-view="receipt">open</button></td></tr>
+                    <tr class="row" tabindex="0" data-open="receipt"><td>PTT-1210 fx cutoff<span class="id">01JBXJ4</span></td><td><span class="pill p-fail">✗ failed</span></td><td><span class="bar"><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="no"></i><i class="ok"></i></span></td><td class="c-dim">headless · CI</td><td><button class="linkbtn" type="button" data-view="receipt">open</button></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- LIVE -->
+          <div class="screen" data-screen="live" hidden>
+            <div class="runhead">
+              <h2>PTT-1234 add --json to status<span>01JBXQ7 · build</span></h2>
+              <div class="acts"><button class="btn ghost" type="button" data-view="tab2">Watch in tab 2<span class="k">t</span></button><button class="btn" type="button" data-view="receipt">Receipt so far<span class="k">r</span></button></div>
+            </div>
+            <div class="pipe" aria-label="Stages">
+              <div class="stage done"><div class="n"><span class="c-pass">✓</span> spec</div><div class="d">claude · 1m12s</div></div>
+              <span class="link">→</span>
+              <div class="stage done"><div class="n"><span class="c-pass">✓</span> tests</div><div class="d">codex · 7 failing tests</div></div>
+              <span class="link">→</span>
+              <div class="stage now" id="st-impl"><div class="n"><span class="c-run pulse" id="st-impl-g">◐</span> implement</div><div class="d" id="st-impl-d">claude · 2nd try</div></div>
+              <span class="link">→</span>
+              <div class="stage wait" id="st-del"><div class="n">○ deliver</div><div class="d">PR + receipt</div></div>
+            </div>
+            <div class="ready" id="ready"><span class="pill p-pass">✓ every check passed</span><span>The receipt is ready.</span><button class="btn" type="button" data-view="receipt">Open receipt<span class="k">r</span></button></div>
+            <div class="grid2">
+              <div class="block hot">
+                <span class="bt"><b>checks</b> · run by conductor, not by the agent</span>
+                <div class="checks">
+                  <span class="c-pass">✓</span><span>scope</span><span class="d">only <code>src/</code> changed</span>
+                  <span id="ck-tests-g" class="c-run pulse">◐</span><span>tests</span><span class="d" id="ck-tests-d"><span id="ck-tests-n" class="num">5 of 7</span> passing<span class="prog"><i id="ck-tests-p" style="width:71%"></i></span></span>
+                  <span id="ck-mut-g" class="c-faint">○</span><span>mutation</span><span class="d" id="ck-mut-d">next · needs 0.70</span>
+                </div>
+                <p class="note-line">1st try failed: tests missed 11 injected bugs. The 2nd try starts fresh and gets that list.</p>
+              </div>
+              <div class="block">
+                <span class="bt"><b>evidence</b> · latest</span>
+                <div class="log" id="log">
+                  <span class="t">12:04:13</span><span class="src s-observed">observed</span><span>edited <code>src/status.rs</code></span>
+                  <span class="t">12:04:20</span><span class="src s-witnessed">witnessed</span><span>scope passed</span>
+                  <span class="t">12:04:23</span><span class="src s-measured">measured</span><span>+18k tokens</span>
+                  <span class="t">12:04:25</span><span class="src s-inferred">inferred</span><span>herdr: claude idle</span>
+                </div>
+              </div>
+            </div>
+            <div class="block">
+              <span class="bt"><b>herdr tab 2</b> · conductor opens a pane per stage and closes it once the stage passes</span>
+              <div class="layout" id="layout">
+                <div class="mini closed"><span class="c-pass">✓</span> spec<div class="s">pane closed</div></div>
+                <div class="mini closed"><span class="c-pass">✓</span> tests<div class="s">pane closed</div></div>
+                <div class="mini open" id="mini-impl"><span class="c-run">◐</span> implement<div class="s">pane open · claude</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- RECEIPT -->
+          <div class="screen" data-screen="receipt" hidden>
+            <div class="verdict">
+              <span class="big">PASSED</span>
+              <span>PTT-1234 add --json to status · 01JBXQ7</span>
+              <span class="pill p-pass">5 of 5 checks</span>
+              <span class="pill p-warn">2 things not checked</span>
+            </div>
+            <div class="block">
+              <span class="bt"><b>what was proven</b> · each of these could have failed</span>
+              <ul class="plain">
+                <li><span class="c-pass">✓</span> <b>Tests were written by a different agent</b> <span class="c-dim">(codex), then locked</span></li>
+                <li><span class="c-pass">✓</span> <b>Tests failed before the change</b> <span class="c-dim">7 of 7, on assertions</span></li>
+                <li><span class="c-pass">✓</span> <b>Tests pass after it</b> <span class="c-dim">7 of 7, twice, no flakes</span></li>
+                <li><span class="c-pass">✓</span> <b>Tests catch injected bugs</b> <span class="c-dim">19 of 23 · score 0.83, needs 0.70</span></li>
+                <li><span class="c-pass">✓</span> <b>Only allowed files changed</b> <span class="c-dim"><code>src/</code> only; protected paths untouched</span></li>
+              </ul>
+            </div>
+            <div class="grid2">
+              <div class="block hot">
+                <span class="bt"><b>look here first</b> · bugs the tests missed</span>
+                <ul class="plain mut">
+                  <li><span class="at">status.rs:88</span> <code>&gt;</code> became <code>&gt;=</code> unnoticed</li>
+                  <li><span class="at">status.rs:102</span> removing <code>flush()</code> went unnoticed</li>
+                  <li><span class="at">+2 more</span> <button class="linkbtn" type="button">show</button></li>
+                </ul>
+              </div>
+              <div class="block">
+                <span class="bt"><b>not checked</b></span>
+                <ul class="plain">
+                  <li><span class="c-warn">!</span> non-UTF-8 paths: no test covers them</li>
+                  <li><span class="c-warn">!</span> the agent could read the whole machine</li>
+                </ul>
+              </div>
+            </div>
+            <details class="more">
+              <summary>How it ran, and proof it wasn't changed</summary>
+              <div>
+                <dl class="kv">
+                  <dt>stages</dt><dd>spec · claude → tests · codex → implement · claude (2 tries)</dd>
+                  <dt>where</dt><dd>herdr tab 2 · no human steps needed</dd>
+                  <dt>turns</dt><dd><span class="s-observed">11 observed</span> · 0 inferred</dd>
+                  <dt>tokens</dt><dd><span class="s-measured">212k measured</span> · 11m05s</dd>
+                  <dt>record</dt><dd>anchored in commit 4e1c0d2 · signed ✓ · re-checks cleanly ✓</dd>
+                  <dt>trace</dt><dd>4f1c9a0b in Tempo</dd>
+                </dl>
+              </div>
+            </details>
+            <div class="reach"><span>Also in PR #412</span><span><code>.conductor/runs/01JBXQ7/receipt.json</code></span><span><code>conductor receipt 01JBXQ7</code></span></div>
+          </div>
+
+          <!-- LAUNCH -->
+          <div class="screen" data-screen="launch" hidden>
+            <p class="lead">Three questions, then conductor opens a new herdr tab for the run.</p>
+            <div class="steps">
+              <div class="step"><span class="no">1</span><span class="q">What kind of work?</span>
+                <div class="body2">
+                  <div class="opts" role="radiogroup" aria-label="Workflow kind">
+                    <button class="opt" role="radio" aria-checked="true" type="button"><span class="r">(•)</span> build a change</button>
+                    <button class="opt" role="radio" aria-checked="false" type="button" disabled><span class="r">( )</span> ask a question<span class="v">v0.2</span></button>
+                    <button class="opt" role="radio" aria-checked="false" type="button" disabled><span class="r">( )</span> QA<span class="v">v0.2</span></button>
+                    <button class="opt" role="radio" aria-checked="false" type="button" disabled><span class="r">( )</span> troubleshoot<span class="v">v0.3</span></button>
+                  </div>
+                  <span class="hint">spec → tests by one agent → code by another</span>
+                </div>
+              </div>
+              <div class="step"><span class="no">2</span><label class="q" for="in-spec">What should it build?</label>
+                <div class="body2"><input class="field" id="in-spec" value="tickets/PTT-1240.md"></div>
+              </div>
+              <div class="step"><span class="no">3</span><span class="q">Where should it run?</span>
+                <div class="body2">
+                  <div class="opts" role="radiogroup" aria-label="Where to run" id="exec">
+                    <button class="opt" role="radio" aria-checked="true" type="button" data-exec="herdr"><span class="r">(•)</span> herdr, in a new tab <span class="hint">you can watch and step in</span></button>
+                    <button class="opt" role="radio" aria-checked="false" type="button" data-exec="headless"><span class="r">( )</span> in the background <span class="hint">no panes; for CI and overnight</span></button>
+                  </div>
+                </div>
+              </div>
+              <div class="step"><span class="no"></span>
+                <div class="body2" style="grid-column:2">
+                  <div class="opts"><button class="btn" type="button" id="start">Start run<span class="k">⏎</span></button><span class="hint" id="start-hint">opens herdr tab 5; runs 3 already active</span></div>
+                  <details class="more">
+                    <summary>Defaults from this repo's policy</summary>
+                    <div><span>agents: spec claude · tests codex · implement claude</span><span>tests must catch 70% of injected bugs · 2 test runs</span><span>protected: <code>.github/</code> <code>.conductor/</code> <code>migrations/</code> <code>Cargo.lock</code></span><span>budget: 60 min · $5 advisory</span></div>
+                  </details>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="keys" id="keys"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HERDR TABS 2-4: a run's tab -->
+    <div class="runtab" id="tab-run" hidden>
+      <div class="pane side-pane">
+        <div class="pane-h"><b>conductor</b><span id="rt-paneid">tab 2 · status</span></div>
+        <div class="side" id="rt-side"></div>
+      </div>
+      <div class="agents" id="rt-agents"></div>
+    </div>
+  </section>
+
+  <section class="notes" aria-label="Notes on this mockup">
+    <div class="note">
+      <h2>What changed in v2 and v3</h2>
+      <ul>
+        <li><b>Runs run side by side:</b> each run gets its own herdr tab. Conductor opens a pane for each stage, closes it once the stage passes, and leaves it open if the stage fails or needs you.</li>
+        <li><b>Receipt is one key away:</b> <b>r</b> works on every screen, there's a receipt column in the runs list, a receipt-so-far button while a run is working, and the receipt is also in the PR and on disk.</li>
+        <li><b>Agents control panes too:</b> in tab 4, codex opened a <code>cargo watch</code> pane through conductor. It stays inside its own run's tab, and every pane it opens is recorded.</li>
+        <li><b>Less dense:</b> larger text, fewer columns, a one-line explanation on each screen, and details folded away until you ask for them.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h2>Symbols (the same ones herdr uses)</h2>
+      <div class="legend">
+        <span class="g-blocked">◆</span><span>needs you</span>
+        <span class="g-working">◐</span><span>working</span>
+        <span class="c-pass">✓</span><span>passed a check that could have failed</span>
+        <span class="c-fail">✗</span><span>failed</span>
+        <span class="g-idle">○</span><span>not started</span>
+      </div>
+    </div>
+    <div class="note">
+      <h2>Evidence labels</h2>
+      <div class="legend">
+        <span class="s-observed">●</span><span><b>observed</b>: reported by the agent's own hooks</span>
+        <span class="s-measured">●</span><span><b>measured</b>: read from the agent's session log</span>
+        <span class="s-witnessed">●</span><span><b>witnessed</b>: a check conductor ran itself</span>
+        <span class="s-inferred">●</span><span><b>inferred</b>: herdr's guess, never used as proof</span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  var conductorViews=['runs','live','receipt','launch'];
+  var view='runs';
+  var KEYS={
+    runs:[['↑↓','move'],['⏎','open'],['r','receipt',1],['n','new run'],['t','go to run tab']],
+    live:[['t','watch in herdr tab'],['r','receipt so far',1],['p','pause'],['x','stop'],['esc','all runs']],
+    receipt:[['o','open PR'],['d','see the diff'],['v','re-check'],['esc','all runs']],
+    launch:[['tab','next'],['⏎','start run'],['esc','cancel']]
+  };
+  function $(id){return document.getElementById(id);}
+  function renderKeys(){
+    var el=$('keys');el.innerHTML='';
+    (KEYS[view]||[]).forEach(function(k){var s=document.createElement('span');if(k[2])s.className='hot';s.innerHTML='<kbd>'+k[0]+'</kbd>'+k[1];el.appendChild(s);});
+  }
+
+  // run tabs (herdr view)
+  var RUNS={
+    tab2:{tab:2,title:'PTT-1234',sub:'add --json to status',
+      stages:[['c-pass','✓','spec','claude · pane closed'],['c-pass','✓','tests','codex · pane closed'],['c-run','◐','implement','claude · 2nd try'],['c-faint','○','deliver','PR + receipt']],
+      now:'<span class="c-run">◐</span> tests <span class="num" id="rt-tests">5 of 7</span> passing',
+      panes:[{h:'claude · implement',id:'pane 2.1',focus:true,lines:['<span class="c-dim">› fix the 11 bugs the tests missed; tests are locked</span>','<span class="tool">● Read src/status.rs</span>','  The check at line 88 needs a case for','  exactly zero pending items.','<span class="tool">● Edit src/status.rs</span>  <span class="c-dim">+14 −3</span>','<span class="tool">● Bash cargo test status::</span>','<span class="ok" id="rt-ag">  ⎿ 5 passed · 2 running</span>']}],
+      closed:['spec ✓','tests ✓']},
+    tab3:{tab:3,title:'PTT-1229',sub:'retry backoff',
+      stages:[['c-pass','✓','spec','claude · pane closed'],['c-pass','✓','tests','codex · pane closed'],['c-blocked','◆','implement','waiting for you'],['c-faint','○','deliver','']],
+      now:'<span class="c-blocked">◆</span> the agent asked a question',
+      panes:[{h:'claude · implement',id:'pane 3.1',focus:true,ask:true,lines:['<span class="tool">● Bash cargo build</span>','<span class="c-fail">  ⎿ error: tokio 1.40 needed by backoff 0.5</span>','  I need to update Cargo.lock to add the','  newer tokio. It is on the protected list.']}],
+      closed:['spec ✓','tests ✓']},
+    tab4:{tab:4,title:'PTT-1238',sub:'holiday calendar',
+      stages:[['c-pass','✓','spec','claude · pane closed'],['c-run','◐','tests','codex · writing'],['c-faint','○','implement',''],['c-faint','○','deliver','']],
+      now:'<span class="c-run">◐</span> writing tests from the spec',
+      panes:[{h:'codex · tests',id:'pane 4.1',focus:true,lines:['<span class="c-dim">› write failing tests for the spec; do not touch src/</span>','<span class="tool">● Read .conductor/runs/01JBXR1/spec.md</span>','<span class="tool">● Write tests/holiday_calendar.rs</span>','  12 cases: weekends, fixed holidays,','  observed-on-Monday rules, year boundaries.','<span class="tool">● conductor pane open --cmd "cargo watch -x test"</span>','<span class="c-dim">  ⎿ opened pane 4.2 · recorded</span>']},
+             {h:'cargo watch · opened by codex',id:'pane 4.2',lines:['<span class="c-dim">opened by the agent through conductor · closes when the stage ends</span>','[Running cargo test]','<span class="c-fail">test holiday_calendar::observed_monday ... FAILED</span>','<span class="c-fail">test holiday_calendar::year_boundary ... FAILED</span>','<span class="c-dim">12 failed, as expected before implement</span>']}],
+      closed:['spec ✓']}
+  };
+  function renderRunTab(key){
+    var r=RUNS[key];
+    $('rt-paneid').textContent='tab '+r.tab+' · status';
+    var st=r.stages.map(function(s){return '<div><span class="'+s[0]+'">'+s[1]+'</span> '+s[2]+(s[3]?'<span class="s">'+s[3]+'</span>':'')+'</div>';}).join('');
+    $('rt-side').innerHTML='<div><h3>'+r.title+'</h3><div class="sub">'+r.sub+'</div></div>'
+      +'<div class="vstages">'+st+'</div>'
+      +'<div>'+r.now+'</div>'
+      +'<div class="opts"><button class="btn" type="button" data-view="receipt">Receipt so far<span class="k">r</span></button><button class="btn ghost" type="button" data-view="runs">All runs<span class="k">1</span></button></div>'
+      +'<div class="hint">o open a shell here · c close finished panes<br>agents can open panes in this tab too; each one is recorded</div>';
+    var ag=$('rt-agents');ag.className='agents'+(r.panes.length>1?' two':'');
+    ag.innerHTML=r.panes.map(function(p){
+      return '<div class="pane'+(p.focus?' focus':'')+'"><div class="pane-h"><b>'+p.h+'</b><span>'+p.id+'</span></div><div class="out">'+p.lines.map(function(l){return '<span>'+l+'</span>';}).join('')+'</div>'
+        +(p.ask?'<div class="ask"><b class="c-blocked">◆ Allow editing Cargo.lock?</b><div class="hint">It\'s protected by this repo\'s policy. Your answer is recorded in the receipt.</div><div class="opts" style="margin-top:8px"><button class="btn" type="button">Allow once</button><button class="btn ghost" type="button">Deny, find another way</button></div></div>':'')
+        +'</div>';
+    }).join('')+'<div class="closedrow">closed by conductor: '+r.closed.map(function(c){return '<span class="pill p-dim">'+c+'</span>';}).join(' ')+' <span>· reopen with o</span></div>';
+    ag.lastChild.style.gridColumn='1';
+    bind(document.getElementById('tab-run'));
+  }
+
+  function go(name){
+    view=name;
+    var isRun=/^tab\d$/.test(name);
+    $('tab-conductor').hidden=isRun;$('tab-run').hidden=!isRun;
+    document.querySelectorAll('.htab').forEach(function(t){t.setAttribute('aria-selected',String(isRun?t.getAttribute('data-view')===name:t.getAttribute('data-htab')==='1'));});
+    document.querySelectorAll('.seg [data-view]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-view')===name));});
+    if(isRun){renderRunTab(name);return;}
+    document.querySelectorAll('[data-screen]').forEach(function(s){s.hidden=s.getAttribute('data-screen')!==name;});
+    document.querySelectorAll('.tab').forEach(function(t){t.setAttribute('aria-selected',String(t.getAttribute('data-view')===name));});
+    renderKeys();
+    if(name==='live')startLive();
+  }
+  function bind(scope){
+    scope.querySelectorAll('[data-view]').forEach(function(b){
+      if(b._bound)return;b._bound=true;
+      b.addEventListener('click',function(e){e.stopPropagation();go(b.getAttribute('data-view'));});
+    });
+  }
+  bind(document);
+
+  // theme
+  function markTheme(){
+    var t=root.getAttribute('data-theme');
+    if(!t){t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+    document.querySelectorAll('[data-theme-set]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-theme-set')===t));});
+  }
+  document.querySelectorAll('[data-theme-set]').forEach(function(b){b.addEventListener('click',function(){root.setAttribute('data-theme',b.getAttribute('data-theme-set'));markTheme();});});
+  markTheme();
+
+  // runs rows
+  var rows=[].slice.call(document.querySelectorAll('#runrows .row'));
+  var sel=0;
+  function select(i){sel=Math.max(0,Math.min(rows.length-1,i));rows.forEach(function(r,j){r.classList.toggle('sel',j===sel);});}
+  rows.forEach(function(r,i){
+    r.addEventListener('click',function(){select(i);go(r.getAttribute('data-open'));});
+    r.addEventListener('keydown',function(e){if(e.key==='Enter'){go(r.getAttribute('data-open'));}});
+  });
+
+  // launch
+  var hint=$('start-hint');
+  document.querySelectorAll('#exec .opt').forEach(function(o,_,all){
+    o.addEventListener('click',function(){
+      all.forEach(function(x){var on=x===o;x.setAttribute('aria-checked',String(on));x.querySelector('.r').textContent=on?'(•)':'( )';});
+      hint.textContent=o.getAttribute('data-exec')==='herdr'?'opens herdr tab 5; runs 3 already active':'runs with no panes; follow it here or in Tempo';
+    });
+  });
+  $('start').addEventListener('click',function(){resetLive();go('live');});
+
+  // live animation
+  var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var timer=null,step=0,done=false;
+  var liveScreen=document.querySelector('[data-screen="live"]');
+  var liveTemplate=liveScreen.innerHTML;
+  var sbG=$('sb-g').outerHTML,sbS=$('sb-s').textContent;
+  function logLine(src,text){
+    var log=$('log');var d=new Date(2026,8,23,12,4,28+step*3);
+    var t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+    [['t',t],['src s-'+src,src],['',text]].forEach(function(p){var s=document.createElement('span');if(p[0])s.className=p[0];s.innerHTML=p[1];log.appendChild(s);});
+    while(log.children.length>15){for(var k=0;k<3;k++)log.removeChild(log.firstChild);}
+  }
+  function setTests(n){RUNS.tab2.now='<span class="c-run">◐</span> tests <span class="num">'+n+'</span> passing';}
+  var script=[
+    function(){$('ck-tests-n').textContent='6 of 7';$('ck-tests-p').style.width='86%';setTests('6 of 7');},
+    function(){$('ck-tests-n').textContent='7 of 7';$('ck-tests-p').style.width='100%';logLine('witnessed','tests: 7 of 7 passed');setTests('7 of 7');},
+    function(){$('ck-tests-g').className='c-pass';$('ck-tests-g').textContent='✓';$('ck-tests-d').textContent='7 of 7, twice, no flakes';logLine('witnessed','second test run matched');},
+    function(){$('ck-mut-g').className='c-run pulse';$('ck-mut-g').textContent='◐';$('ck-mut-d').textContent='injecting bugs · 9 of 23 tried';logLine('witnessed','mutation testing started');},
+    function(){$('ck-mut-d').textContent='injecting bugs · 17 of 23 tried';},
+    function(){$('ck-mut-g').className='c-pass';$('ck-mut-g').textContent='✓';$('ck-mut-d').textContent='caught 19 of 23 · 0.83';logLine('witnessed','mutation 0.83, needs 0.70');logLine('measured','212k tokens in total');},
+    function(){$('st-impl').className='stage done';$('st-impl-g').className='c-pass';$('st-impl-g').textContent='✓';$('st-impl-d').textContent='claude · passed on 2nd try';
+      $('st-del').className='stage done';$('st-del').querySelector('.n').innerHTML='<span class="c-pass">✓</span> deliver';$('st-del').querySelector('.d').textContent='PR #412 · receipt';
+      $('mini-impl').className='mini closed';$('mini-impl').innerHTML='<span class="c-pass">✓</span> implement<div class="s">pane closed</div>';
+      $('sb-g').className='g-done';$('sb-g').textContent='◉';$('sb-s').textContent='done · tab 2 closing';$('ht2g').className='g-done';$('ht2g').textContent='◉';
+      $('ready').classList.add('on');logLine('witnessed','record anchored in 4e1c0d2');done=true;}
+  ];
+  function tick(){if(step>=script.length){clearInterval(timer);timer=null;return;}script[step]();step++;}
+  function startLive(){if(done||timer)return;if(reduce){while(step<script.length)tick();return;}timer=setInterval(tick,1500);}
+  function resetLive(){
+    if(timer){clearInterval(timer);timer=null;}step=0;done=false;
+    liveScreen.innerHTML=liveTemplate;bind(liveScreen);
+    $('sb-g').outerHTML=sbG;$('sb-s').textContent=sbS;$('ht2g').className='g-working';$('ht2g').textContent='◐';
+    RUNS.tab2.now='<span class="c-run">◐</span> tests <span class="num">5 of 7</span> passing';
+  }
+
+  // keyboard
+  document.addEventListener('keydown',function(e){
+    var tag=(e.target&&e.target.tagName)||'';
+    if(tag==='INPUT'||tag==='TEXTAREA'||e.metaKey||e.ctrlKey||e.altKey)return;
+    if(e.key>='1'&&e.key<='4'&&conductorViews.indexOf(view)>=0){go(conductorViews[+e.key-1]);return;}
+    if(e.key==='1'){go('runs');return;}
+    if(e.key==='r'){go('receipt');return;}
+    if(e.key==='Escape'){go('runs');return;}
+    if(e.key==='t'){if(view==='runs'){var o=rows[sel].getAttribute('data-open');go(/^tab/.test(o)?o:'tab2');}else if(view==='live'){go('tab2');}return;}
+    if(view==='runs'){
+      if(e.key==='ArrowDown'||e.key==='j'){e.preventDefault();select(sel+1);rows[sel].focus();}
+      else if(e.key==='ArrowUp'||e.key==='k'){e.preventDefault();select(sel-1);rows[sel].focus();}
+      else if(e.key==='Enter'&&document.activeElement===document.body){go(rows[sel].getAttribute('data-open'));}
+      else if(e.key==='n'){go('launch');}
+    } else if(view==='launch'&&e.key==='Enter'&&document.activeElement===document.body){resetLive();go('live');}
+  });
+
+  renderKeys();
+})();
+</script>

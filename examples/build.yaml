@@ -1,0 +1,84 @@
+# A build workflow: one agent writes a spec, a different agent writes failing tests from
+# it, and a third stage implements until those tests pass — without being able to touch
+# them. Conductor reads this file from the base commit, never from an agent's worktree.
+id: feature-with-independent-tests
+version: 1
+kind: build
+requires:
+  conductor: ">=0.1"
+  herdr_protocol: "22"          # checked only when running in herdr
+
+runtime:
+  artifact_root: ".conductor/{{run_id}}"
+  max_parallel: 3               # parallel runs, each in its own herdr tab
+  approvals: manual
+
+herdr:
+  tab_per_run: true
+  close_passed_panes: true
+  agent_control: own_tab        # agents may open panes in their own run's tab
+  agents_may_start_agents: false
+
+budget:
+  advisory_max_cost_usd: 5.00
+  max_stage_wall_clock_sec: 900
+  max_mutation_wall_clock_sec: 600
+  max_prompts_per_stage: 6
+  max_total_wall_clock_sec: 3600
+  on_exceeded: halt_before_next_stage
+
+defaults:
+  timeout_ms: 300000
+  retries: { max: 2, ladder: [in_context, fresh, cross_kind] }
+  on_failure: abort
+  on_blocked: escalate
+
+stages:
+  - id: spec
+    agent: { kind: claude }
+    prompt_file: prompts/spec.md
+    inputs: { ticket: PTT-1234 }
+    scope: { write: ["{{artifact_root}}/spec.md"] }
+    outputs:
+      - { id: spec, path: "{{artifact_root}}/spec.md", required: true }
+    gate: { type: file_nonempty, ref: spec }
+
+  - id: tests
+    depends_on: [spec]
+    agent: { kind: codex }
+    prompt_file: prompts/tdd.md
+    inputs: { spec: "{{stages.spec.outputs.spec.path}}" }
+    scope: { write: ["tests/**"] }
+    outputs:
+      - { id: tests, path: "tests/generated_tests.rs", required: true }
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["cargo", "test", "--no-fail-fast", "--message-format", "json"]
+        parser: cargo_json
+        assert:
+          - "compiled == true"
+          - "tests_failed == tests_new"
+          - "failures.kind all == 'assertion'"
+
+  - id: implement
+    depends_on: [tests]
+    agent: { kind: claude }
+    context: fresh
+    prompt_file: prompts/implement.md
+    scope:
+      write: ["src/**"]
+      frozen: ["{{stages.tests.outputs.tests.path}}"]
+      deny: ["git.push"]
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["cargo", "test", "--message-format", "json"]
+        parser: cargo_json
+        reruns: 2
+        assert: ["tests_failed == 0"]
+      - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.7 }
+    on_failure: { action: retry, max: 2, feedback: gate_output }
+
+teardown:
+  - { id: close_panes, always: true }

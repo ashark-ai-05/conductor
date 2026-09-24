@@ -1,0 +1,117 @@
+{"reason":"compiler-artifact","package_id":"path+file:///tmp/claude-0/sample/demo#0.1.0","manifest_path":"/tmp/claude-0/sample/demo/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"demo","src_path":"/tmp/claude-0/sample/demo/src/lib.rs","edition":"2024","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"0","debuginfo":2,"debug_assertions":true,"overflow_checks":true,"test":false},"features":[],"filenames":["/tmp/claude-0/sample/demo/target/debug/deps/libdemo-21dab3a1347fbbe2.rlib","/tmp/claude-0/sample/demo/target/debug/deps/libdemo-21dab3a1347fbbe2.rmeta"],"executable":null,"fresh":false}
+{"reason":"compiler-artifact","package_id":"path+file:///tmp/claude-0/sample/demo#0.1.0","manifest_path":"/tmp/claude-0/sample/demo/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"demo","src_path":"/tmp/claude-0/sample/demo/src/lib.rs","edition":"2024","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"0","debuginfo":2,"debug_assertions":true,"overflow_checks":true,"test":true},"features":[],"filenames":["/tmp/claude-0/sample/demo/target/debug/deps/demo-7e8058a2c8442f1e"],"executable":"/tmp/claude-0/sample/demo/target/debug/deps/demo-7e8058a2c8442f1e","fresh":false}
+{"reason":"build-finished","success":true}
+
+running 7 tests
+test tests::positive ... ok
+test tests::passes ... ok
+test tests::skipped ... ignored
+test tests::eq_fails ... FAILED
+test tests::boom ... FAILED
+test tests::trivial ... FAILED
+test tests::unimpl ... FAILED
+
+failures:
+
+---- tests::eq_fails stdout ----
+
+thread 'tests::eq_fails' (5623) panicked at src/lib.rs:9:29:
+assertion `left == right` failed
+  left: 4
+ right: 5
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:80:14
+   2: core::panicking::assert_failed_inner
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:439:17
+   3: core::panicking::assert_failed::<i32, i32>
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:394:5
+   4: demo::tests::eq_fails
+             at ./src/lib.rs:9:29
+   5: demo::tests::eq_fails::{closure#0}
+             at ./src/lib.rs:9:26
+   6: <demo::tests::eq_fails::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+   7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::boom stdout ----
+
+thread 'tests::boom' (5622) panicked at src/lib.rs:12:25:
+boom
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:80:14
+   2: demo::tests::boom
+             at ./src/lib.rs:12:25
+   3: demo::tests::boom::{closure#0}
+             at ./src/lib.rs:12:22
+   4: <demo::tests::boom::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+   5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::trivial stdout ----
+
+thread 'tests::trivial' (5626) panicked at src/lib.rs:10:28:
+assertion failed: false
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:80:14
+   2: core::panicking::panic
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:150:5
+   3: demo::tests::trivial
+             at ./src/lib.rs:10:28
+   4: demo::tests::trivial::{closure#0}
+             at ./src/lib.rs:10:25
+   5: <demo::tests::trivial::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+   6: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::unimpl stdout ----
+
+thread 'tests::unimpl' (5627) panicked at src/lib.rs:2:37:
+not yet implemented
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:80:14
+   2: core::panicking::panic
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:150:5
+   3: demo::unfinished
+             at ./src/lib.rs:2:37
+   4: demo::tests::unimpl
+             at ./src/lib.rs:11:38
+   5: demo::tests::unimpl::{closure#0}
+             at ./src/lib.rs:11:24
+   6: <demo::tests::unimpl::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+   7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    tests::boom
+    tests::eq_fails
+    tests::trivial
+    tests::unimpl
+
+test result: FAILED. 2 passed; 4 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
