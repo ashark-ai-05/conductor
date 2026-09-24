@@ -47,6 +47,7 @@ conductor-engine.workspace = true
 conductor-herdr.workspace = true
 conductor-model.workspace = true
 conductor-tui.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

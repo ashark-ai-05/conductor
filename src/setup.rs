@@ -24,6 +24,9 @@ budget:
   max_stage_wall_clock_sec: 900
   max_mutation_wall_clock_sec: 600
 
+# Turn a passed run into a draft pull request with its receipt (`conductor deliver`).
+# deliver: { base: main }
+
 stages:
   - id: tests
     agent:

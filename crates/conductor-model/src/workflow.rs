@@ -34,6 +34,40 @@ pub struct Workflow {
     pub stages: Vec<Stage>,
     #[serde(default)]
     pub teardown: Vec<Teardown>,
+    /// What happens to a run that passes: `conductor deliver` runs automatically.
+    #[serde(default)]
+    pub deliver: Option<Deliver>,
+}
+
+/// Delivering a passed run: push its branch and open a pull request with its receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deliver {
+    /// Open a pull request; `false` only pushes the branch.
+    #[serde(default = "yes")]
+    pub pr: bool,
+    /// Open it as a draft, for a person to mark ready.
+    #[serde(default = "yes")]
+    pub draft: bool,
+    /// The branch to merge into; the remote's default branch when unset.
+    pub base: Option<String>,
+    #[serde(default = "default_remote")]
+    pub remote: String,
+}
+
+impl Default for Deliver {
+    fn default() -> Self {
+        Deliver {
+            pr: true,
+            draft: true,
+            base: None,
+            remote: default_remote(),
+        }
+    }
+}
+
+fn default_remote() -> String {
+    "origin".into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

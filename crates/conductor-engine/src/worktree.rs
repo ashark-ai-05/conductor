@@ -116,6 +116,12 @@ pub fn anchor(wt: &Path, run_id: &str, chain_head: &str) -> Result<String, GitEr
     head(wt)
 }
 
+/// Commits what is staged, as conductor. Returns the new commit.
+pub fn commit_as_conductor(wt: &Path, msg: &str) -> Result<String, GitError> {
+    git(wt, &["commit", "-q", "-m", msg])?;
+    head(wt)
+}
+
 /// Puts the worktree back exactly as it was at `sha`, keeping ignored files such as build
 /// output so a fresh attempt doesn't rebuild from nothing.
 pub fn reset(wt: &Path, sha: &str) -> Result<(), GitError> {

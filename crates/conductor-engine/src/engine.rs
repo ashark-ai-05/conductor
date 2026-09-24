@@ -65,6 +65,8 @@ pub struct Outcome {
     pub dir: RunDir,
     pub worktree: PathBuf,
     pub branch: String,
+    /// The workflow's delivery settings, for the caller to act on once the run passed.
+    pub deliver: Option<conductor_model::workflow::Deliver>,
     /// The OTLP export, when an endpoint is configured: the trace id, or why it failed.
     /// A failed export never fails the run.
     pub export: Option<Result<String, String>>,
@@ -785,6 +787,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         worktree: wt,
         branch,
         export,
+        deliver: wf.deliver.clone(),
     })
 }
 
