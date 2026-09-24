@@ -809,8 +809,21 @@ fn baseline_tests(stage: &Stage, wt: &Path, run_id: &str, timeout: Duration) -> 
     else {
         return BTreeSet::new();
     };
+    // The baseline must list every test, and before a stage some are expected to fail:
+    // `cargo test` stops at the first failing test binary unless told not to, which would
+    // leave later binaries' tests out, and make them look new afterwards.
+    let mut argv = command.clone();
+    if argv.get(1).map(String::as_str) == Some("test")
+        && argv
+            .first()
+            .is_some_and(|p| p == "cargo" || p.ends_with("/cargo"))
+        && !argv.iter().any(|a| a == "--no-fail-fast")
+    {
+        let at = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
+        argv.insert(at, "--no-fail-fast".into());
+    }
     let e = conductor_checks::runner::run(&conductor_checks::runner::Spec {
-        argv: command,
+        argv: &argv,
         cwd: wt,
         timeout,
         pass_env: &[],
