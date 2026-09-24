@@ -183,7 +183,80 @@ fn post(cfg: &Config, path: &str, body: &Value) -> Result<(), String> {
         .map_err(|e| format!("{url}: {e}"))
 }
 
-/// Sends the run's trace and logs. Returns the trace id.
+/// Histogram bucket bounds for durations, in seconds.
+pub const DURATION_BOUNDS: &[f64] = &[
+    1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0, 3600.0,
+];
+
+/// `ExportMetricsServiceRequest` as JSON: one run's values as deltas over the run.
+///
+/// The resource names only the service, never the run: a collector turning deltas into
+/// cumulative series (for Prometheus, the `deltatocumulative` processor) keys series by
+/// resource, and per-run resources would never add up.
+pub fn metrics_body(metrics: &[crate::metrics::Metric], start_ns: u128, end_ns: u128) -> Value {
+    use crate::metrics::Value as V;
+    let out: Vec<Value> = metrics
+        .iter()
+        .map(|m| {
+            let attrs =
+                |a: &crate::metrics::Attrs| a.iter().map(|(k, v)| attr(k, v)).collect::<Vec<_>>();
+            let histogram = m.points.values().any(|v| matches!(v, V::Observations(_)));
+            let points: Vec<Value> = m
+                .points
+                .iter()
+                .map(|(a, v)| {
+                    let mut p = json!({
+                        "attributes": attrs(a),
+                        "startTimeUnixNano": start_ns.to_string(),
+                        "timeUnixNano": end_ns.to_string(),
+                    });
+                    match v {
+                        V::Int(n) => p["asInt"] = json!(n.to_string()),
+                        V::Double(d) => p["asDouble"] = json!(d),
+                        V::Observations(o) => {
+                            let mut buckets = vec![0u64; DURATION_BOUNDS.len() + 1];
+                            for x in o {
+                                let i = DURATION_BOUNDS
+                                    .iter()
+                                    .position(|b| x <= b)
+                                    .unwrap_or(DURATION_BOUNDS.len());
+                                buckets[i] += 1;
+                            }
+                            p["count"] = json!(o.len().to_string());
+                            p["sum"] = json!(o.iter().sum::<f64>());
+                            p["min"] = json!(o.iter().copied().fold(f64::INFINITY, f64::min));
+                            p["max"] = json!(o.iter().copied().fold(0.0, f64::max));
+                            p["explicitBounds"] = json!(DURATION_BOUNDS);
+                            p["bucketCounts"] =
+                                json!(buckets.iter().map(u64::to_string).collect::<Vec<_>>());
+                        }
+                    }
+                    p
+                })
+                .collect();
+            let mut metric = json!({"name": m.name, "unit": m.unit, "description": m.description});
+            if histogram {
+                metric["histogram"] = json!({"aggregationTemporality": 1, "dataPoints": points});
+            } else {
+                metric["sum"] = json!({
+                    "aggregationTemporality": 1,
+                    "isMonotonic": true,
+                    "dataPoints": points,
+                });
+            }
+            metric
+        })
+        .collect();
+    json!({"resourceMetrics": [{
+        "resource": {"attributes": [
+            attr("service.name", "conductor"),
+            attr("service.version", env!("CARGO_PKG_VERSION")),
+        ]},
+        "scopeMetrics": [{"scope": scope(), "metrics": out}],
+    }]})
+}
+
+/// Sends the run's trace, logs and metrics. Returns the trace id.
 pub fn export(
     cfg: &Config,
     run_id: &str,
@@ -201,6 +274,14 @@ pub fn export(
         "/v1/logs",
         &logs_body(run_id, &t, events, receipt_sha256, cfg.content),
     )?;
+    if let Some(run) = t.spans.first() {
+        let metrics = crate::metrics::collect(&t, events);
+        post(
+            cfg,
+            "/v1/metrics",
+            &metrics_body(&metrics, run.start_ns, run.end_ns),
+        )?;
+    }
     Ok(t.trace_id)
 }
 
@@ -214,6 +295,26 @@ mod tests {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn metrics_are_deltas_with_bucketed_durations() {
+        let events = fixture();
+        let t = crate::trace::build("R", &events);
+        let m = crate::metrics::collect(&t, &events);
+        let body = metrics_body(&m, 1, 2);
+        let metrics = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap();
+        let find = |n: &str| metrics.iter().find(|m| m["name"] == n).unwrap();
+        let runs = &find("conductor.runs")["sum"];
+        assert_eq!(runs["aggregationTemporality"], 1);
+        assert_eq!(runs["dataPoints"][0]["asInt"], "1");
+        let d = &find("conductor.run.duration")["histogram"]["dataPoints"][0];
+        assert_eq!(d["count"], "1");
+        // 103 s lands in the (60, 120] bucket.
+        assert_eq!(d["bucketCounts"][5], "1");
+        assert!(find("conductor.cost")["sum"]["dataPoints"][0]["asDouble"].is_number());
     }
 
     #[test]
@@ -303,7 +404,7 @@ mod tests {
 
     #[test]
     fn a_run_is_sent_as_traces_then_logs() {
-        let (url, h) = collector(2);
+        let (url, h) = collector(3);
         let cfg = Config {
             endpoint: url,
             headers: vec![],
@@ -313,7 +414,12 @@ mod tests {
         let got = h.join().unwrap();
         assert_eq!(got[0].0, "/v1/traces");
         assert_eq!(got[1].0, "/v1/logs");
+        assert_eq!(got[2].0, "/v1/metrics");
         assert!(got[0].1.contains(&id));
+        assert!(
+            !got[2].1.contains("conductor.run_id"),
+            "metrics never name the run"
+        );
     }
 
     #[test]

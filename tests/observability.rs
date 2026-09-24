@@ -80,7 +80,7 @@ stages:
     git(p, &["add", "."]);
     git(p, &["commit", "-q", "-m", "base"]);
 
-    let (url, got) = collector(2);
+    let (url, got) = collector(3);
     let out = Command::new(env!("CARGO_BIN_EXE_conductor"))
         .args([
             "run",
@@ -100,6 +100,8 @@ stages:
     let got = got.join().unwrap();
     assert_eq!(got[0].0, "/v1/traces");
     assert_eq!(got[1].0, "/v1/logs");
+    assert_eq!(got[2].0, "/v1/metrics");
+    assert!(got[2].1.contains("conductor.runs"));
 
     // The id printed, the id on the receipt and the id exported are the same.
     let exported = stdout
@@ -127,6 +129,21 @@ stages:
     assert!(text.contains(&format!("trace {exported}")), "{text}");
     assert!(text.contains("✓ stage write"), "{text}");
     assert!(text.contains("✓ check scope"), "{text}");
+
+    // `conductor stats` adds the repository's runs up, also without a collector.
+    let st = Command::new(env!("CARGO_BIN_EXE_conductor"))
+        .arg("stats")
+        .current_dir(p)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&st.stdout);
+    assert!(st.status.success(), "{text}");
+    assert!(text.contains("conductor stats · 1 run\n"), "{text}");
+    assert!(
+        text.contains("runs       1 passed · 0 did not · 100%"),
+        "{text}"
+    );
+    assert!(text.contains("file_nonempty 1/1"), "{text}");
 }
 
 #[test]
