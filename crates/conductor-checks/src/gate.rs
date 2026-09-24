@@ -53,6 +53,9 @@ pub struct GateResult {
     pub mutation: Option<MutationReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tests: Option<TestReport>,
+    /// What the check proves, when the gate states it itself (an exit-code check does).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -85,6 +88,7 @@ impl GateResult {
             scope: None,
             mutation: None,
             tests: None,
+            claim: None,
         }
     }
 
@@ -257,6 +261,9 @@ fn command_assert(
     ctx: &Context,
 ) -> GateResult {
     const NAME: &str = "command_assert";
+    if parser == Parser::Exit {
+        return exit_check(command, reruns, ctx);
+    }
     if parser == Parser::JunitXml {
         return GateResult::unwitnessed(NAME, "the junit_xml parser arrives in v0.2");
     }
@@ -363,9 +370,12 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
         "cargo".into(),
         "mutants".into(),
         "--no-shuffle".into(),
+        // A workspace whose root is also a package would otherwise mutate the root only.
+        "--workspace".into(),
         "--output".into(),
         out_dir.display().to_string(),
     ];
+    let mut changed_sources: Vec<String> = Vec::new();
     if in_diff {
         let diff = match std::process::Command::new("git")
             .arg("-C")
@@ -399,6 +409,7 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
         }
         argv.push("--in-diff".into());
         argv.push(diff_path.display().to_string());
+        changed_sources = changed_rust_sources(&String::from_utf8_lossy(&diff));
     }
     let exec = runner::run(&runner::Spec {
         argv: &argv,
@@ -449,13 +460,95 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
             } else {
                 Verdict::Failed
             };
+            let files = report.files.len();
             result.detail = format!(
-                "caught {caught} of {tested} injected bugs · {score:.2}, needs {min_score:.2}"
+                "caught {caught} of {tested} injected bugs in {files} file{} · {score:.2}, needs {min_score:.2}",
+                if files == 1 { "" } else { "s" }
             );
         }
     }
+    // A changed source file with no mutants at all was never put to the test: say so, so a
+    // thin score can't pass for coverage it doesn't have.
+    let untested: Vec<&str> = changed_sources
+        .iter()
+        .filter(|f| !report.files.contains(*f))
+        .map(String::as_str)
+        .collect();
+    if !untested.is_empty() {
+        result
+            .detail
+            .push_str(&format!("; no mutants in {}", untested.join(", ")));
+    }
     result.mutation = Some(report);
     result
+}
+
+/// A command that must exit 0, such as `cargo fmt --check`, run `reruns + 1` times.
+fn exit_check(command: &[String], reruns: u32, ctx: &Context) -> GateResult {
+    let shown = command.join(" ");
+    let mut result = GateResult::new("command_assert", Verdict::Pending, "");
+    result.claim = Some(format!("`{shown}` succeeds"));
+    let runs = reruns as usize + 1;
+    let mut ok = 0;
+    let mut failed_with = None;
+    for _ in 0..runs {
+        let exec = runner::run(&runner::Spec {
+            argv: command,
+            cwd: ctx.worktree,
+            timeout: ctx.timeout,
+            pass_env: &[],
+            run_id: ctx.run_id,
+            inherit_env: false,
+            set_env: &[],
+        });
+        if !exec.complete() {
+            let why = exec
+                .reason
+                .clone()
+                .unwrap_or_else(|| "the command did not finish".into());
+            result.executions.push(exec);
+            result.verdict = Verdict::Unwitnessed;
+            result.detail = format!("`{shown}` could not be witnessed: {why}");
+            return result;
+        }
+        if exec.exit_code == Some(0) {
+            ok += 1;
+        } else {
+            failed_with = exec.exit_code;
+        }
+        result.executions.push(exec);
+    }
+    let code = failed_with.map_or("without a code".into(), |c| c.to_string());
+    (result.verdict, result.detail) = if ok == runs {
+        let times = if runs > 1 {
+            format!(" on all {runs} runs")
+        } else {
+            String::new()
+        };
+        (Verdict::Passed, format!("`{shown}` exited 0{times}"))
+    } else if ok == 0 {
+        (Verdict::Failed, format!("`{shown}` exited {code}"))
+    } else {
+        (
+            Verdict::Flaky,
+            format!("exited 0 on {ok} of {runs} runs, so it counts as flaky, not passed"),
+        )
+    };
+    result
+}
+
+/// Rust source files a diff changes, leaving out tests, which cargo-mutants doesn't mutate.
+fn changed_rust_sources(diff: &str) -> Vec<String> {
+    let mut out: Vec<String> = diff
+        .lines()
+        .filter_map(|l| l.strip_prefix("+++ b/"))
+        .filter(|p| p.ends_with(".rs"))
+        .filter(|p| !p.starts_with("tests/") && !p.contains("/tests/"))
+        .map(str::to_owned)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]
@@ -463,6 +556,36 @@ mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
+
+    #[test]
+    fn an_exit_check_passes_on_zero_and_says_what_it_proved() {
+        let d = tempfile::tempdir().unwrap();
+        let o = owned();
+        let c = ctx(d.path(), "HEAD", &o);
+        let sh = |script: &str| vec!["sh".to_string(), "-c".to_string(), script.to_string()];
+        let ok = exit_check(&sh("true"), 1, &c);
+        assert_eq!(ok.verdict, Verdict::Passed);
+        assert_eq!(ok.detail, "`sh -c true` exited 0 on all 2 runs");
+        assert_eq!(ok.claim.as_deref(), Some("`sh -c true` succeeds"));
+        let bad = exit_check(&sh("echo 'needs formatting'; exit 3"), 0, &c);
+        assert_eq!(bad.verdict, Verdict::Failed);
+        assert_eq!(
+            bad.detail,
+            "`sh -c echo 'needs formatting'; exit 3` exited 3"
+        );
+        assert!(bad.executions[0].stdout_text().contains("needs formatting"));
+    }
+
+    #[test]
+    fn a_diff_names_the_sources_mutation_should_cover() {
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@\n+x\n\
+                    diff --git a/crates/e/src/m.rs b/crates/e/src/m.rs\n+++ b/crates/e/src/m.rs\n\
+                    +++ b/crates/e/tests/t.rs\n+++ b/tests/x.rs\n+++ b/README.md\n+++ /dev/null\n";
+        assert_eq!(
+            changed_rust_sources(diff),
+            vec!["crates/e/src/m.rs".to_string(), "src/main.rs".to_string()]
+        );
+    }
 
     fn sh(dir: &Path, args: &[&str]) {
         let ok = Command::new("git")

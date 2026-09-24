@@ -161,7 +161,11 @@ fn describe_gate(g: &Gate) -> String {
             } else {
                 String::new()
             };
-            format!("`{}`{runs}: {}", command.join(" "), assert.join("; "))
+            if assert.is_empty() {
+                format!("`{}` exits 0{runs}", command.join(" "))
+            } else {
+                format!("`{}`{runs}: {}", command.join(" "), assert.join("; "))
+            }
         }
         Gate::Mutation { min_score, .. } => format!(
             "mutation testing of your change catches at least {:.0}% of injected bugs",
@@ -260,6 +264,21 @@ fn feedback(r: &GateResult) -> String {
                     .next()
                     .unwrap_or("")
             ));
+        }
+    }
+    // A check with no test report (a formatter, a linter) explains itself in its output.
+    if r.tests.is_none()
+        && r.scope.is_none()
+        && r.mutation.is_none()
+        && let Some(e) = r.executions.last()
+    {
+        let out = format!("{}\n{}", e.stdout_text(), e.stderr_tail);
+        let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+        if !lines.is_empty() {
+            f.push_str("Its output ended with:\n");
+            for l in &lines[lines.len().saturating_sub(30)..] {
+                f.push_str(&format!("    {l}\n"));
+            }
         }
     }
     if let Some(m) = &r.mutation {
@@ -809,8 +828,21 @@ fn baseline_tests(stage: &Stage, wt: &Path, run_id: &str, timeout: Duration) -> 
     else {
         return BTreeSet::new();
     };
+    // The baseline must list every test, and before a stage some are expected to fail:
+    // `cargo test` stops at the first failing test binary unless told not to, which would
+    // leave later binaries' tests out, and make them look new afterwards.
+    let mut argv = command.clone();
+    if argv.get(1).map(String::as_str) == Some("test")
+        && argv
+            .first()
+            .is_some_and(|p| p == "cargo" || p.ends_with("/cargo"))
+        && !argv.iter().any(|a| a == "--no-fail-fast")
+    {
+        let at = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
+        argv.insert(at, "--no-fail-fast".into());
+    }
     let e = conductor_checks::runner::run(&conductor_checks::runner::Spec {
-        argv: command,
+        argv: &argv,
         cwd: wt,
         timeout,
         pass_env: &[],

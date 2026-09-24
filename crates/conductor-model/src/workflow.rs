@@ -388,6 +388,8 @@ impl Gate {
 pub enum Parser {
     CargoJson,
     JunitXml,
+    /// No output is read: the command must exit 0 (a formatter or linter check).
+    Exit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -591,6 +593,24 @@ impl Workflow {
     }
 
     fn validate_stage(&self, r: &mut Report, at: &str, s: &Stage, outputs: &Outputs) {
+        // A check the agent can't run itself leaves it guessing what the check wants. One
+        // run spent 15 minutes hand-formatting files because `cargo fmt` wasn't allowed.
+        if !s.agent.allowed_tools.is_empty() {
+            for g in s.all_gates() {
+                if let Gate::CommandAssert { command, .. } = g
+                    && !agent_may_run(&s.agent.allowed_tools, command)
+                {
+                    r.warn(
+                        format!("{at}.agent.allowed_tools"),
+                        format!(
+                            "`{}` is checked, but the agent may not run it; add `Bash({}:*)` so it can check its own work",
+                            command.join(" "),
+                            command.iter().take(2).cloned().collect::<Vec<_>>().join(" ")
+                        ),
+                    );
+                }
+            }
+        }
         if s.agent.kind == "script" && s.agent.command.is_empty() {
             r.error(
                 format!("{at}.agent.command"),
@@ -674,10 +694,19 @@ impl Workflow {
                     }
                 }
                 Gate::CommandAssert {
-                    command, reruns, ..
+                    command,
+                    reruns,
+                    parser,
+                    assert,
                 } => {
                     if command.is_empty() || command[0].trim().is_empty() {
                         r.error(format!("{gat}.command"), "must name a program to run");
+                    }
+                    if *parser == Parser::Exit && !assert.is_empty() {
+                        r.error(
+                            format!("{gat}.assert"),
+                            "`parser: exit` passes when the command exits 0 and takes no assertions",
+                        );
                     }
                     if *reruns > 10 {
                         r.warn(
@@ -787,6 +816,23 @@ impl Workflow {
     /// them should be different agents. Same agent is allowed, but called out.
     fn separation_of_duties(&self, r: &mut Report) {
         for (i, s) in self.stages.iter().enumerate() {
+            // An implementer working against locked tests can still add tests of its own in
+            // src/ (a `#[cfg(test)]` module), which no path pattern can see. Counting tests
+            // can: only the locked ones may exist after the stage.
+            let counts_new_tests = s.all_gates().any(|g| {
+                matches!(g, Gate::CommandAssert { assert, .. }
+                    if assert.iter().any(|a| a.split_whitespace().collect::<String>() == "tests_new==0"))
+            });
+            if !s.scope.frozen.is_empty() && !counts_new_tests {
+                r.warn(
+                    format!("stages[{i}].gates"),
+                    format!(
+                        "`{}` works against locked tests but could add its own inside src/, where \
+                         the scope check can't see them; assert `tests_new == 0`",
+                        s.id
+                    ),
+                );
+            }
             for f in &s.scope.frozen {
                 for (dep_stage, _) in referenced_outputs(f) {
                     if let Some(author) = self.stages.iter().find(|x| x.id == dep_stage)
@@ -815,6 +861,28 @@ fn check_timeout(r: &mut Report, at: impl Into<String>, t: u64) {
             ),
         );
     }
+}
+
+/// Whether Claude Code's `allowed_tools` let an agent run `command`: a `Bash` entry whose
+/// pattern (`Bash(cargo test:*)`, `Bash(cargo fmt)`, `Bash`) covers the command line.
+fn agent_may_run(allowed: &[String], command: &[String]) -> bool {
+    let line = command.join(" ");
+    allowed.iter().any(|t| {
+        let t = t.trim();
+        if t == "Bash" || t == "Bash(*)" {
+            return true;
+        }
+        let Some(pattern) = t.strip_prefix("Bash(").and_then(|p| p.strip_suffix(')')) else {
+            return false;
+        };
+        match pattern
+            .strip_suffix(":*")
+            .or_else(|| pattern.strip_suffix('*'))
+        {
+            Some(prefix) => line.starts_with(prefix.trim_end()),
+            None => line == pattern,
+        }
+    })
 }
 
 /// `{{stages.<stage>.outputs.<output>.path}}` references in a string.
@@ -915,6 +983,75 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/build.yaml");
+
+    #[test]
+    fn a_check_the_agent_may_not_run_is_flagged() {
+        let allowed = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let cmd = |c: &str| c.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let a = allowed(&["Bash(cargo test:*)", "Read"]);
+        assert!(agent_may_run(&a, &cmd("cargo test --workspace")));
+        assert!(!agent_may_run(&a, &cmd("cargo fmt --all --check")));
+        assert!(agent_may_run(
+            &allowed(&["Bash"]),
+            &cmd("cargo fmt --all --check")
+        ));
+        assert!(agent_may_run(
+            &allowed(&["Bash(cargo fmt --all --check)"]),
+            &cmd("cargo fmt --all --check")
+        ));
+
+        let wf = format!(
+            "{}\n      - {{ type: command_assert, command: [\"cargo\", \"fmt\", \"--all\", \"--check\"], parser: exit }}\n",
+            r#"id: w
+version: 1
+kind: build
+stages:
+  - id: s
+    agent: { kind: claude, allowed_tools: ["Bash(cargo test:*)"] }
+    scope: { write: ["src/**"] }
+    gates:
+      - type: command_assert
+        command: ["cargo", "test"]
+        parser: cargo_json
+        assert: ["tests_failed == 0"]"#
+        );
+        let v = Workflow::parse(&wf).unwrap().validate();
+        let msgs: Vec<&str> = v.warnings.iter().map(|w| w.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("`cargo fmt --all --check` is checked, but the agent may not run it; add `Bash(cargo fmt:*)`")),
+            "{msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("`cargo test` is checked")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn an_implementer_that_could_write_its_own_tests_is_flagged() {
+        let ok = Workflow::parse(EXAMPLE).unwrap().validate();
+        assert!(
+            !ok.warnings
+                .iter()
+                .any(|w| w.message.contains("tests_new == 0")),
+            "{:?}",
+            ok.warnings
+        );
+        let loose = EXAMPLE.replace(
+            r#"["tests_failed == 0", "tests_new == 0"]"#,
+            r#"["tests_failed == 0"]"#,
+        );
+        assert_ne!(loose, EXAMPLE);
+        let v = Workflow::parse(&loose).unwrap().validate();
+        assert!(v.is_ok(), "a warning, not an error");
+        assert!(
+            v.warnings
+                .iter()
+                .any(|w| w.message.contains("`implement` works against locked tests")),
+            "{:?}",
+            v.warnings
+        );
+    }
 
     fn with(edit: impl FnOnce(&mut String)) -> Report {
         let mut text = EXAMPLE.to_owned();

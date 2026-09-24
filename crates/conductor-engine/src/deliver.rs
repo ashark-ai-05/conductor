@@ -208,10 +208,11 @@ pub fn open_pr(pr: &PullRequest) -> Result<String, String> {
         "body": pr.body,
         "draft": pr.draft,
     });
-    let resp = ureq::post(&url)
-        .timeout(std::time::Duration::from_secs(30))
+    let resp = crate::http::agent_for(&url, std::time::Duration::from_secs(30))
+        .post(&url)
         .set("Authorization", &format!("Bearer {}", pr.token))
         .set("Accept", "application/vnd.github+json")
+        .set("Content-Type", "application/json")
         .set("X-GitHub-Api-Version", "2022-11-28")
         .set("User-Agent", "conductor")
         .send_string(&body.to_string());

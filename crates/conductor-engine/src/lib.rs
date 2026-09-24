@@ -8,6 +8,7 @@ pub mod deliver;
 pub mod engine;
 pub mod executor;
 pub mod herdr_exec;
+pub mod http;
 pub mod live;
 pub mod local_panes;
 pub mod metrics;

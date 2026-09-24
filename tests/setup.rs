@@ -192,3 +192,18 @@ fn the_init_workflow_stops_a_tests_agent_that_implements_the_work() {
     assert!(!out.status.success(), "{t}");
     assert!(t.contains("did not hold: tests_failed == tests_new"), "{t}");
 }
+
+/// Tests in two binaries: the red run before the implement stage fails in the first, and
+/// cargo must still list the second, or its tests look "new" afterwards and an honest
+/// implementer is stopped by `tests_new == 0`.
+#[test]
+fn an_honest_implementer_passes_when_the_new_tests_span_several_binaries() {
+    let stub = "mkdir -p tests && \
+        printf 'use demo::double;\\n#[test] fn twice() { assert_eq!(double(2), 4); }\\n' > tests/a.rs && \
+        printf 'use demo::double;\\n#[test] fn negative() { assert_eq!(double(-3), -6); }\\n' > tests/b.rs && \
+        echo 'pub fn double(_x: i32) -> i32 { todo!() }' > src/lib.rs";
+    let (_d, out) = scripted_init(stub);
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    assert!(t.contains("PASSED"), "{t}");
+}
