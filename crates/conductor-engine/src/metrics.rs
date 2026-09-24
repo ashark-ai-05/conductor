@@ -270,7 +270,38 @@ pub fn collect(t: &Trace, events: &[Event]) -> Vec<Metric> {
 /// The runs screen's three headline numbers — runs passed, catch rate, spend — built from
 /// every run recorded in `repo`, or `None` when it has no recorded runs.
 pub fn headline_stats(repo: &std::path::Path) -> Option<[(String, String); 3]> {
-    todo!()
+    let ids = crate::list_runs(repo);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut all: Vec<Metric> = vec![];
+    for id in &ids {
+        let events = crate::store::RunDir::for_run(repo, id).read_events().ok()?;
+        let trace = crate::trace::build(id, &events);
+        merge(&mut all, collect(&trace, &events));
+    }
+    let t = |name, f: &[(&str, &str)]| total(&all, name, f);
+    let runs = t("conductor.runs", &[]);
+    let passed = t("conductor.runs", &[("verdict", "passed")]);
+    let finished = t("conductor.attempts", &[("outcome", "passed")])
+        + t("conductor.attempts", &[("outcome", "check_failed")]);
+    let caught = t("conductor.catches", &[]);
+    let cost = t("conductor.cost", &[]);
+    let tokens = t("conductor.tokens", &[]);
+    Some([
+        (
+            format!("{passed:.0} of {runs:.0} passed"),
+            "runs recorded in this repository".into(),
+        ),
+        (
+            format!("{} caught", pct(caught, finished)),
+            "the agent said done, a check said no".into(),
+        ),
+        (
+            format!("${cost:.2}"),
+            format!("{} tokens across all runs", human(tokens)),
+        ),
+    ])
 }
 
 /// Adds another run's metrics into `into`.

@@ -531,6 +531,9 @@ impl conductor_tui::app::RunSource for RepoRuns {
     fn live(&self, run_id: &str) -> Option<conductor_model::view::LiveRun> {
         conductor_engine::live::read(&self.0, run_id)
     }
+    fn stats(&self) -> Option<[(String, String); 3]> {
+        conductor_engine::metrics::headline_stats(&self.0)
+    }
 }
 
 fn ui(args: &[String]) -> Result<ExitCode> {

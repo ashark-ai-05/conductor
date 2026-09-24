@@ -116,6 +116,9 @@ impl App {
     /// The app over a repository's runs, refreshed on every tick.
     pub fn from_source(source: Box<dyn RunSource>) -> Self {
         let mut app = App::from_runs(source.receipts(), source.running());
+        if let Some(stats) = source.stats() {
+            app.stats = stats;
+        }
         app.source = Some(source);
         app
     }
@@ -229,7 +232,11 @@ impl App {
         let Some(src) = &self.source else { return };
         let (receipts, running) = (src.receipts(), src.running());
         let live = src.live(&self.live.run_id);
+        let stats = src.stats();
         self.set_runs(receipts, running);
+        if let Some(s) = stats {
+            self.stats = s;
+        }
         if let Some(l) = live {
             self.live = l;
         }
