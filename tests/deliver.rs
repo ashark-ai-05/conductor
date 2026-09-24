@@ -39,7 +39,7 @@ fn fake_github() -> (String, std::thread::JoinHandle<(String, String, String)>) 
         let mut r = BufReader::new(s.try_clone().unwrap());
         let mut line = String::new();
         r.read_line(&mut line).unwrap();
-        let (mut len, mut auth) = (0, String::new());
+        let (mut len, mut auth, mut typed) = (0, String::new(), false);
         loop {
             let mut h = String::new();
             r.read_line(&mut h).unwrap();
@@ -53,7 +53,12 @@ fn fake_github() -> (String, std::thread::JoinHandle<(String, String, String)>) 
             if lower.starts_with("authorization:") {
                 auth = h.trim().to_owned();
             }
+            if lower.starts_with("content-type:") {
+                assert!(lower.contains("application/json"), "{h}");
+                typed = true;
+            }
         }
+        assert!(typed, "the request declares its JSON body");
         let mut body = vec![0; len];
         r.read_exact(&mut body).unwrap();
         let answer = r#"{"html_url":"https://github.com/o/r/pull/7","number":7}"#;

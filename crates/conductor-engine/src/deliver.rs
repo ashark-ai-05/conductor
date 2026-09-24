@@ -212,6 +212,7 @@ pub fn open_pr(pr: &PullRequest) -> Result<String, String> {
         .post(&url)
         .set("Authorization", &format!("Bearer {}", pr.token))
         .set("Accept", "application/vnd.github+json")
+        .set("Content-Type", "application/json")
         .set("X-GitHub-Api-Version", "2022-11-28")
         .set("User-Agent", "conductor")
         .send_string(&body.to_string());
