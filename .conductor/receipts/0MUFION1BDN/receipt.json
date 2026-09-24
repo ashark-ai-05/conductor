@@ -1,0 +1,107 @@
+{
+  "run_id": "0MUFION1BDN",
+  "work": "Runs-screen headline numbers from run metrics",
+  "kind": "build",
+  "checks": [
+    {
+      "claim": "Only allowed files changed (tests)",
+      "verdict": "passed",
+      "detail": "4 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests failed before the change, for the right reason",
+      "verdict": "passed",
+      "detail": "161 passed, 13 failed; every assertion held",
+      "source": "witnessed"
+    },
+    {
+      "claim": "`cargo fmt --all --check` succeeds (tests)",
+      "verdict": "passed",
+      "detail": "`cargo fmt --all --check` exited 0",
+      "source": "witnessed"
+    },
+    {
+      "claim": "`cargo clippy --workspace --all-targets -- -D warnings` succeeds (tests)",
+      "verdict": "passed",
+      "detail": "`cargo clippy --workspace --all-targets -- -D warnings` exited 0",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Only allowed files changed (implement)",
+      "verdict": "passed",
+      "detail": "3 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests pass after the change, on every run",
+      "verdict": "passed",
+      "detail": "174 passed, 0 failed; every assertion held on all 2 runs",
+      "source": "witnessed"
+    },
+    {
+      "claim": "`cargo fmt --all --check` succeeds (implement)",
+      "verdict": "passed",
+      "detail": "`cargo fmt --all --check` exited 0",
+      "source": "witnessed"
+    },
+    {
+      "claim": "`cargo clippy --workspace --all-targets -- -D warnings` succeeds (implement)",
+      "verdict": "passed",
+      "detail": "`cargo clippy --workspace --all-targets -- -D warnings` exited 0",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests catch injected bugs",
+      "verdict": "passed",
+      "detail": "caught 9 of 10 injected bugs in 3 files · 0.90, needs 0.60",
+      "source": "witnessed"
+    }
+  ],
+  "survivors": [
+    {
+      "at": "src/main.rs:535",
+      "change": "replace <impl conductor_tui::app::RunSource for RepoRuns>::stats -> Option<[(String, String); 3]> with None"
+    }
+  ],
+  "not_checked": [
+    "the agent could read the whole machine: no sandbox"
+  ],
+  "how": [
+    [
+      "stages",
+      "tests · claude (2 tries) → implement · claude"
+    ],
+    [
+      "where",
+      "headless · worktree branch conductor/0MUFION1BDN"
+    ],
+    [
+      "agent actions",
+      "241 tool calls observed · 244 turns"
+    ],
+    [
+      "tokens",
+      "28699409 measured · $10.80"
+    ],
+    [
+      "wall clock",
+      "34m47s"
+    ],
+    [
+      "trace",
+      "f4dd26b7a0e0ff3ccd6a17bd27f1482b · `conductor trace 0MUFION1BDN`"
+    ]
+  ],
+  "integrity": {
+    "chain_head": "sha256:4ec0c645e76975a9a2998294f930bf693b74c2cacd9b90698bce4c5bd9a492b6",
+    "anchored_in": "dcbb642948a4",
+    "signed": false,
+    "reproduces": true,
+    "trace_id": null
+  },
+  "also_at": [
+    ".conductor/runs/0MUFION1BDN/receipt.json",
+    "conductor receipt 0MUFION1BDN"
+  ]
+}

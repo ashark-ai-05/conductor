@@ -1,0 +1,56 @@
+# Conductor builds conductor. One agent writes failing tests; another makes them pass
+# without being able to touch them; conductor checks the tests catch injected bugs.
+# The tests of this workspace live in each crate's tests/ directory.
+id: build
+version: 1
+kind: build
+
+defaults:
+  retries: { max: 2, ladder: [in_context, fresh] }
+
+budget:
+  max_stage_wall_clock_sec: 1500
+  max_mutation_wall_clock_sec: 1200
+
+deliver: { base: main }
+
+stages:
+  - id: tests
+    agent:
+      kind: claude
+      allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)", "Bash(cargo check:*)"]
+    prompt_file: .conductor/prompts/tests.md
+    scope: { write: ["crates/*/tests/**", "crates/*/src/**", "src/**"] }
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["cargo", "test", "--workspace", "--no-fail-fast", "--message-format", "json"]
+        parser: cargo_json
+        assert:
+          - "compiled == true"
+          - "tests_new > 0"
+          - "tests_failed == tests_new"
+          - "failures.kind all != 'trivial'"
+      - { type: command_assert, command: ["cargo", "fmt", "--all", "--check"], parser: exit }
+      - { type: command_assert, command: ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"], parser: exit }
+
+  - id: implement
+    depends_on: [tests]
+    agent:
+      kind: claude
+      allowed_tools: ["Bash(cargo test:*)", "Bash(cargo build:*)", "Bash(cargo check:*)", "Bash(cargo clippy:*)", "Bash(cargo fmt:*)"]
+    prompt_file: .conductor/prompts/implement.md
+    scope:
+      write: ["crates/*/src/**", "src/**"]
+      frozen: ["crates/*/tests/**"]
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["cargo", "test", "--workspace", "--message-format", "json"]
+        parser: cargo_json
+        reruns: 1
+        # tests_new == 0: the implementer adds no tests of its own, even inside src/.
+        assert: ["tests_failed == 0", "tests_run > 0", "tests_new == 0"]
+      - { type: command_assert, command: ["cargo", "fmt", "--all", "--check"], parser: exit }
+      - { type: command_assert, command: ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"], parser: exit }
+      - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.6 }
