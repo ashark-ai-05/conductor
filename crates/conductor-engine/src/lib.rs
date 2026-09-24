@@ -4,6 +4,7 @@
 //! what happens next is a rule over recorded facts.
 
 pub mod agent_panes;
+pub mod deliver;
 pub mod engine;
 pub mod executor;
 pub mod herdr_exec;

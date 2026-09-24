@@ -22,6 +22,11 @@ usage:
                                      each run gets a tab and each stage a pane
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
+  conductor deliver [<run-id>] [--ready] [--base <branch>] [--remote <name>] [--no-pr]
+                                     push a passed run's branch with its record and
+                                     open a draft pull request with its receipt
+  conductor check-pr [--head <rev>]  in CI: re-check that a pull request's branch ends
+                                     at a delivered run's receipt, from git alone
   conductor stats                    what this repository's runs add up to: pass rate,
                                      how often checks caught an agent, retries, spend
   conductor trace [<run-id>] [--export]
@@ -73,6 +78,8 @@ fn real_main() -> Result<ExitCode> {
         Some("verify") => verify_cmd(&args[1..]),
         Some("trace") => trace_cmd(&args[1..]),
         Some("stats") => stats_cmd(&args[1..]),
+        Some("deliver") => deliver_cmd(&args[1..]),
+        Some("check-pr") => check_pr_cmd(&args[1..]),
         Some("ui") => ui(&args[1..]),
         Some("validate") => validate(&args[1..]),
         Some("pane") => pane(&args[1..]),
@@ -190,6 +197,18 @@ fn run(args: &[String]) -> Result<ExitCode> {
         outcome.worktree.display(),
         outcome.branch
     );
+    if outcome.verdict == Verdict::Passed
+        && let Some(d) = &outcome.deliver
+    {
+        println!();
+        if let Err(e) = deliver(&repo, &outcome.run_id, d) {
+            eprintln!("  warning   delivery failed: {e:#}");
+            eprintln!(
+                "            the run passed; retry with `conductor deliver {}`",
+                outcome.run_id
+            );
+        }
+    }
     match &outcome.export {
         Some(Ok(id)) => println!("  exported  trace {id} over OTLP"),
         Some(Err(e)) => eprintln!("  warning   the OTLP export failed: {e}"),
@@ -255,6 +274,152 @@ fn receipt(args: &[String]) -> Result<ExitCode> {
     let r = read_receipt(&repo, &id).map_err(anyhow::Error::msg)?;
     print_receipt(&r);
     Ok(ExitCode::SUCCESS)
+}
+
+fn deliver_cmd(args: &[String]) -> Result<ExitCode> {
+    let mut d = conductor_model::workflow::Deliver::default();
+    let mut run_id = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--ready" => d.draft = false,
+            "--no-pr" => d.pr = false,
+            "--base" => d.base = Some(it.next().context("--base needs a branch")?.clone()),
+            "--remote" => d.remote = it.next().context("--remote needs a name")?.clone(),
+            other if other.starts_with('-') => {
+                bail!("unknown option `{other}` for `conductor deliver`")
+            }
+            other => run_id = Some(other.to_owned()),
+        }
+    }
+    let repo = repo_root()?;
+    let id = match run_id {
+        Some(id) => id,
+        None => list_runs(&repo)
+            .into_iter()
+            .next()
+            .context("no runs recorded in this repository yet")?,
+    };
+    deliver(&repo, &id, &d)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Commits the run's record, pushes its branch and opens the pull request.
+fn deliver(repo: &Path, id: &str, d: &conductor_model::workflow::Deliver) -> Result<()> {
+    use conductor_engine::deliver as dl;
+    let git = |args: &[&str]| -> Result<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()?;
+        if !out.status.success() {
+            bail!(
+                "git {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let record = dl::commit_record(repo, id).map_err(anyhow::Error::msg)?;
+    println!("  record    committed {} on conductor/{id}", &record[..12]);
+    let branch = format!("conductor/{id}");
+    git(&["push", "-q", &d.remote, &format!("{branch}:{branch}")])?;
+    println!("  pushed    {branch} to {}", d.remote);
+
+    let receipt = read_receipt(repo, id).map_err(anyhow::Error::msg)?;
+    let body = dl::markdown(&receipt);
+    let body_path = conductor_engine::store::RunDir::for_run(repo, id)
+        .root
+        .join("pr.md");
+    std::fs::write(&body_path, &body)?;
+    if !d.pr {
+        println!("  pr body   {}", body_path.display());
+        return Ok(());
+    }
+    let url = git(&["remote", "get-url", &d.remote])?;
+    let slug = dl::github_slug(&url)
+        .with_context(|| format!("`{}` does not look like a GitHub remote", d.remote))?;
+    let base = match &d.base {
+        Some(b) => b.clone(),
+        None => git(&[
+            "symbolic-ref",
+            "--short",
+            &format!("refs/remotes/{}/HEAD", d.remote),
+        ])
+        .ok()
+        .and_then(|r| r.split_once('/').map(|(_, b)| b.to_owned()))
+        .unwrap_or_else(|| "main".into()),
+    };
+    let Some(token) = dl::github_token() else {
+        println!(
+            "  no pr     no GitHub token (GITHUB_TOKEN, GH_TOKEN or `gh auth login`); open one from {branch} into {base} with the body in {}",
+            body_path.display()
+        );
+        return Ok(());
+    };
+    let api =
+        std::env::var("CONDUCTOR_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into());
+    let pr = dl::open_pr(&dl::PullRequest {
+        api: &api,
+        token: &token,
+        slug: &slug,
+        title: &receipt.work,
+        head: &branch,
+        base: &base,
+        body: &body,
+        draft: d.draft,
+    })
+    .map_err(anyhow::Error::msg)?;
+    println!(
+        "  {}  {pr}",
+        if d.draft { "draft pr " } else { "pr       " }
+    );
+    Ok(())
+}
+
+fn check_pr_cmd(args: &[String]) -> Result<ExitCode> {
+    let mut head = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--head" => head = Some(it.next().context("--head needs a revision")?.clone()),
+            other => bail!("unknown option `{other}` for `conductor check-pr`"),
+        }
+    }
+    // In a GitHub Actions pull_request run the checkout is a merge commit; the branch's
+    // own head is in the event.
+    let head = head
+        .or_else(|| {
+            let path = std::env::var("GITHUB_EVENT_PATH").ok()?;
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+            v.pointer("/pull_request/head/sha")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "HEAD".into());
+    let repo = repo_root()?;
+    let lines = conductor_engine::deliver::check_pr(&repo, &head).map_err(anyhow::Error::msg)?;
+    println!("conductor check-pr · {head}\n");
+    for l in &lines {
+        println!("  {}  {}", if l.ok { "✓" } else { "✗" }, l.what);
+    }
+    let ok = lines.iter().all(|l| l.ok);
+    println!(
+        "\n{}",
+        if ok {
+            "The receipt describes this branch."
+        } else {
+            "The receipt does not describe this branch."
+        }
+    );
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 fn stats_cmd(args: &[String]) -> Result<ExitCode> {
