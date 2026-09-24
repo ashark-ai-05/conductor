@@ -172,8 +172,8 @@ pub fn logs_body(
 
 fn post(cfg: &Config, path: &str, body: &Value) -> Result<(), String> {
     let url = format!("{}{path}", cfg.endpoint);
-    let mut req = ureq::post(&url)
-        .timeout(std::time::Duration::from_secs(10))
+    let mut req = crate::http::agent_for(&url, std::time::Duration::from_secs(10))
+        .post(&url)
         .set("Content-Type", "application/json");
     for (k, v) in &cfg.headers {
         req = req.set(k, v);

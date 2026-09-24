@@ -11,7 +11,7 @@ conductor-herdr.workspace = true
 conductor-model.workspace = true
 hex.workspace = true
 nix = { version = "0.29", features = ["signal", "process"] }
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

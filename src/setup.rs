@@ -64,7 +64,8 @@ stages:
         command: ["cargo", "test", "--message-format", "json"]
         parser: cargo_json
         reruns: 1               # passing twice rules out a lucky run
-        assert: ["tests_failed == 0", "tests_run > 0"]
+        # tests_new == 0: the implementer adds no tests of its own, even inside src/.
+        assert: ["tests_failed == 0", "tests_run > 0", "tests_new == 0"]
       # Bugs injected into the changed code must be caught by the tests.
       - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.6 }
 "#;

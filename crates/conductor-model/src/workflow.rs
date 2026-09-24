@@ -787,6 +787,23 @@ impl Workflow {
     /// them should be different agents. Same agent is allowed, but called out.
     fn separation_of_duties(&self, r: &mut Report) {
         for (i, s) in self.stages.iter().enumerate() {
+            // An implementer working against locked tests can still add tests of its own in
+            // src/ (a `#[cfg(test)]` module), which no path pattern can see. Counting tests
+            // can: only the locked ones may exist after the stage.
+            let counts_new_tests = s.all_gates().any(|g| {
+                matches!(g, Gate::CommandAssert { assert, .. }
+                    if assert.iter().any(|a| a.split_whitespace().collect::<String>() == "tests_new==0"))
+            });
+            if !s.scope.frozen.is_empty() && !counts_new_tests {
+                r.warn(
+                    format!("stages[{i}].gates"),
+                    format!(
+                        "`{}` works against locked tests but could add its own inside src/, where \
+                         the scope check can't see them; assert `tests_new == 0`",
+                        s.id
+                    ),
+                );
+            }
             for f in &s.scope.frozen {
                 for (dep_stage, _) in referenced_outputs(f) {
                     if let Some(author) = self.stages.iter().find(|x| x.id == dep_stage)
@@ -915,6 +932,32 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/build.yaml");
+
+    #[test]
+    fn an_implementer_that_could_write_its_own_tests_is_flagged() {
+        let ok = Workflow::parse(EXAMPLE).unwrap().validate();
+        assert!(
+            !ok.warnings
+                .iter()
+                .any(|w| w.message.contains("tests_new == 0")),
+            "{:?}",
+            ok.warnings
+        );
+        let loose = EXAMPLE.replace(
+            r#"["tests_failed == 0", "tests_new == 0"]"#,
+            r#"["tests_failed == 0"]"#,
+        );
+        assert_ne!(loose, EXAMPLE);
+        let v = Workflow::parse(&loose).unwrap().validate();
+        assert!(v.is_ok(), "a warning, not an error");
+        assert!(
+            v.warnings
+                .iter()
+                .any(|w| w.message.contains("`implement` works against locked tests")),
+            "{:?}",
+            v.warnings
+        );
+    }
 
     fn with(edit: impl FnOnce(&mut String)) -> Report {
         let mut text = EXAMPLE.to_owned();

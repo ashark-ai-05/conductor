@@ -22,6 +22,8 @@ pub struct MutationReport {
     pub unviable: u64,
     pub survivors: Vec<Survivor>,
     pub tool_version: Option<String>,
+    /// Every file cargo-mutants generated a mutant in, viable or not.
+    pub files: std::collections::BTreeSet<String>,
 }
 
 impl MutationReport {
@@ -80,7 +82,18 @@ pub fn parse(json: &str) -> Result<MutationReport, ReadError> {
             Some(Survivor { file, line, what })
         })
         .collect();
+    let files = raw
+        .outcomes
+        .iter()
+        .filter_map(|o| {
+            o.scenario
+                .pointer("/Mutant/file")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
     Ok(MutationReport {
+        files,
         caught: raw.caught,
         missed: raw.missed,
         timeout: raw.timeout,
@@ -102,6 +115,7 @@ mod tests {
         assert_eq!((r.caught, r.missed, r.timeout, r.unviable), (13, 3, 0, 0));
         assert!((r.score().unwrap() - 13.0 / 16.0).abs() < 1e-9);
         assert_eq!(r.tool_version.as_deref(), Some("27.1.0"));
+        assert!(!r.files.is_empty());
     }
 
     #[test]

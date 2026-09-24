@@ -76,7 +76,7 @@ stages:
         command: ["cargo", "test", "--message-format", "json"]
         parser: cargo_json
         reruns: 2
-        assert: ["tests_failed == 0"]
+        assert: ["tests_failed == 0", "tests_new == 0"]
       - { type: mutation, tool: cargo_mutants, in_diff: true, min_score: 0.7 }
     on_failure: { action: retry, max: 2, feedback: gate_output }
 

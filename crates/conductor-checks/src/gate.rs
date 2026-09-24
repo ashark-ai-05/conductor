@@ -363,9 +363,12 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
         "cargo".into(),
         "mutants".into(),
         "--no-shuffle".into(),
+        // A workspace whose root is also a package would otherwise mutate the root only.
+        "--workspace".into(),
         "--output".into(),
         out_dir.display().to_string(),
     ];
+    let mut changed_sources: Vec<String> = Vec::new();
     if in_diff {
         let diff = match std::process::Command::new("git")
             .arg("-C")
@@ -399,6 +402,7 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
         }
         argv.push("--in-diff".into());
         argv.push(diff_path.display().to_string());
+        changed_sources = changed_rust_sources(&String::from_utf8_lossy(&diff));
     }
     let exec = runner::run(&runner::Spec {
         argv: &argv,
@@ -449,13 +453,41 @@ fn mutation(tool: MutationTool, in_diff: bool, min_score: f64, ctx: &Context) ->
             } else {
                 Verdict::Failed
             };
+            let files = report.files.len();
             result.detail = format!(
-                "caught {caught} of {tested} injected bugs · {score:.2}, needs {min_score:.2}"
+                "caught {caught} of {tested} injected bugs in {files} file{} · {score:.2}, needs {min_score:.2}",
+                if files == 1 { "" } else { "s" }
             );
         }
     }
+    // A changed source file with no mutants at all was never put to the test: say so, so a
+    // thin score can't pass for coverage it doesn't have.
+    let untested: Vec<&str> = changed_sources
+        .iter()
+        .filter(|f| !report.files.contains(*f))
+        .map(String::as_str)
+        .collect();
+    if !untested.is_empty() {
+        result
+            .detail
+            .push_str(&format!("; no mutants in {}", untested.join(", ")));
+    }
     result.mutation = Some(report);
     result
+}
+
+/// Rust source files a diff changes, leaving out tests, which cargo-mutants doesn't mutate.
+fn changed_rust_sources(diff: &str) -> Vec<String> {
+    let mut out: Vec<String> = diff
+        .lines()
+        .filter_map(|l| l.strip_prefix("+++ b/"))
+        .filter(|p| p.ends_with(".rs"))
+        .filter(|p| !p.starts_with("tests/") && !p.contains("/tests/"))
+        .map(str::to_owned)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]
@@ -463,6 +495,17 @@ mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
+
+    #[test]
+    fn a_diff_names_the_sources_mutation_should_cover() {
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@\n+x\n\
+                    diff --git a/crates/e/src/m.rs b/crates/e/src/m.rs\n+++ b/crates/e/src/m.rs\n\
+                    +++ b/crates/e/tests/t.rs\n+++ b/tests/x.rs\n+++ b/README.md\n+++ /dev/null\n";
+        assert_eq!(
+            changed_rust_sources(diff),
+            vec!["crates/e/src/m.rs".to_string(), "src/main.rs".to_string()]
+        );
+    }
 
     fn sh(dir: &Path, args: &[&str]) {
         let ok = Command::new("git")
