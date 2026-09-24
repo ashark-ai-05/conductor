@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="5" failures="3" errors="0" time="0.010093633">
+    <testsuite name="v.test.mjs" timestamp="2026-09-24T22:22:05.995Z" hostname="vm" tests="5" failures="3" errors="0" skipped="1" time="0.010093633">
+        <testcase classname="v.test.mjs" name="in range" time="0.001433771">
+        </testcase>
+        <testcase classname="v.test.mjs" name="caps high" time="0.005524269">
+            <failure message="expected 50 to be 10 // Object.is equality" type="AssertionError">
+AssertionError: expected 50 to be 10 // Object.is equality
+
+- Expected
++ Received
+
+- 10
++ 50
+
+ ❯ v.test.mjs:3:45
+            </failure>
+        </testcase>
+        <testcase classname="v.test.mjs" name="new api" time="0.000927737">
+            <failure message="not implemented" type="Error">
+Error: not implemented
+ ❯ newApi clamp.js:2:28
+ ❯ v.test.mjs:4:32
+            </failure>
+        </testcase>
+        <testcase classname="v.test.mjs" name="fake" time="0.0008225">
+            <failure message="expected true to be false // Object.is equality" type="AssertionError">
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ v.test.mjs:5:35
+            </failure>
+        </testcase>
+        <testcase classname="v.test.mjs" name="later" time="0">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>

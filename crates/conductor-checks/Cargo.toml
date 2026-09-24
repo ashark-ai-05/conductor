@@ -10,6 +10,7 @@ conductor-model.workspace = true
 globset.workspace = true
 hex.workspace = true
 nix = { version = "0.29", features = ["process", "signal"] }
+roxmltree = "0.21.1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -88,12 +88,29 @@ fn init_sets_up_a_rust_repository_once_and_keeps_what_is_there() {
 }
 
 #[test]
-fn init_says_plainly_when_a_project_is_not_rust() {
+fn init_starts_any_project_on_junit_and_says_what_to_fill_in() {
     let d = repo(false);
     let o = conductor(d.path(), &["init"]);
-    assert!(!o.status.success());
-    assert!(text(&o).contains("no Cargo.toml"), "{}", text(&o));
-    assert!(!d.path().join(".conductor").exists());
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("found    an unknown stack"), "{t}");
+    assert!(t.contains("todo     set the test command"), "{t}");
+    let wf = fs::read_to_string(d.path().join(".conductor/workflows/build.yaml")).unwrap();
+    assert!(wf.contains("parser: junit_xml"), "{wf}");
+
+    let d = repo(false);
+    fs::write(
+        d.path().join("package.json"),
+        r#"{"devDependencies":{"jest":"29"}}"#,
+    )
+    .unwrap();
+    let t = text(&conductor(d.path(), &["init"]));
+    assert!(t.contains("found    JavaScript (jest)"), "{t}");
+    assert!(t.contains("npm i -D jest-junit"), "{t}");
+    let ignore = fs::read_to_string(d.path().join(".gitignore")).unwrap();
+    assert_eq!(ignore, "/.conductor/runs/\n/junit.xml\n");
+    let wf = fs::read_to_string(d.path().join(".conductor/workflows/build.yaml")).unwrap();
+    assert!(wf.contains(r#"setup: [["npm", "install"]]"#), "{wf}");
 }
 
 #[test]

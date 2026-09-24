@@ -73,6 +73,10 @@ pub struct TestReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub compile_messages: Vec<String>,
     pub tests: Vec<TestCase>,
+    /// The report files the results were read from, each with its hash (JUnit only; cargo's
+    /// output is the command's stdout, hashed with the execution).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub report_files: Vec<String>,
 }
 
 impl TestReport {

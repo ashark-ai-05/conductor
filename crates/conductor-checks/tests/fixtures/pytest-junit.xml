@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="1" tests="5" time="0.026" timestamp="2026-09-24T22:20:21.828186+00:00" hostname="vm"><testcase classname="tests.test_clamp" name="test_in_range" time="0.000" /><testcase classname="tests.test_clamp" name="test_caps_high" time="0.000"><failure message="assert 50 == 10&#10; +  where 50 = clamp(50)">def test_caps_high():
+&gt;       assert clamp(50) == 10
+E       assert 50 == 10
+E        +  where 50 = clamp(50)
+
+tests/test_clamp.py:8: AssertionError</failure></testcase><testcase classname="tests.test_clamp" name="test_new_api" time="0.000"><failure message="NotImplementedError">def test_new_api():
+&gt;       assert new_api(3) == 3
+               ^^^^^^^^^^
+
+tests/test_clamp.py:11: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+x = 3
+
+    def new_api(x):
+&gt;       raise NotImplementedError
+E       NotImplementedError
+
+clamp/__init__.py:5: NotImplementedError</failure></testcase><testcase classname="tests.test_clamp" name="test_fake" time="0.000"><failure message="assert False">def test_fake():
+&gt;       assert False
+E       assert False
+
+tests/test_clamp.py:14: AssertionError</failure></testcase><testcase classname="tests.test_clamp" name="test_later" time="0.000"><skipped type="pytest.skip" message="later">/work/tests/test_clamp.py:16: later</skipped></testcase></testsuite></testsuites>

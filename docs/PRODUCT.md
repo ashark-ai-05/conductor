@@ -194,7 +194,7 @@ sandbox cost. The scope gate stays as the backstop for agents without hooks.
 | Tests pass with `reruns`, flaky verdict | M | 0.1 |
 | Mutation score, diff only (cargo-mutants) | M | 0.1 |
 | Stale / mutated-worktree / destructive-command / sensitive-new-file | S | 0.1 (reused from dock) |
-| `junit_xml` parser: pytest, jest, go, JUnit | S | 0.2 |
+| `junit_xml` parser: pytest, jest, vitest, go, JUnit; `init` per stack; `setup:` | S | 0.1 |
 | Mutation for other languages (Stryker, mutmut, PIT) | S | 0.2–0.3 |
 | Lint / typecheck / coverage delta | S | 0.2 |
 | Advisory LLM judge | C | 0.3 |

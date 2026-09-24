@@ -37,3 +37,32 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo run -q -- validate examples/build.yaml
+
+  # The init workflow run for real on Python, Go and JavaScript projects: a missing
+  # toolchain fails here instead of skipping.
+  languages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - uses: actions/setup-go@v5
+        with: { go-version: stable, cache: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: pip install pytest
+      - run: go install gotest.tools/gotestsum@latest && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: cargo test --test languages
+        env:
+          CONDUCTOR_LANG_TESTS: "1"

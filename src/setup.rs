@@ -1,6 +1,6 @@
 //! `conductor init` and `conductor doctor`: getting a repository ready, and checking it is.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use conductor_model::Workflow;
 use conductor_model::workflow::Gate;
 use std::collections::BTreeSet;
@@ -113,6 +113,317 @@ anything it must not do. Both agents get this text. Then run:
     conductor run .conductor/workflows/build.yaml --spec .conductor/task.md
 ";
 
+/// A test runner `init` knows how to start a non-Rust repository with. Everything else in
+/// the workflow is the same for every language: the checks read JUnit XML.
+struct Stack {
+    name: String,
+    /// The test command as a YAML flow sequence, and where its report goes.
+    command: String,
+    report: Option<&'static str>,
+    allowed: Vec<String>,
+    tests: Vec<&'static str>,
+    sources: Vec<&'static str>,
+    /// How a test-writer makes new code exist without implementing it.
+    stub: &'static str,
+    /// The `setup:` a run's fresh checkout needs, as a YAML flow sequence of commands.
+    setup: Option<&'static str>,
+    /// Paths the runner writes into the repository, for .gitignore.
+    ignore: Vec<&'static str>,
+    /// Things to do before the first run, printed after init.
+    notes: Vec<String>,
+}
+
+fn quoted(items: &[impl AsRef<str>]) -> String {
+    items
+        .iter()
+        .map(|i| format!("{:?}", i.as_ref()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+impl Stack {
+    /// The project type at `repo`'s root, or a generic starter to edit.
+    fn detect(repo: &Path) -> Stack {
+        let has = |f: &str| repo.join(f).exists();
+        let src_or = |fallback: &'static str| {
+            if has("src") { "src/**" } else { fallback }
+        };
+        if has("package.json") {
+            let pkg = std::fs::read_to_string(repo.join("package.json")).unwrap_or_default();
+            let tests = vec![
+                "**/*.test.*",
+                "**/*.spec.*",
+                "**/__tests__/**",
+                "test/**",
+                "tests/**",
+            ];
+            let stub = "a body that throws `new Error(\"not implemented\")`";
+            if pkg.contains("\"jest\"") && !pkg.contains("\"vitest\"") {
+                let mut notes = vec![];
+                if !pkg.contains("jest-junit") {
+                    notes.push(
+                        "install the JUnit reporter the checks read: `npm i -D jest-junit`".into(),
+                    );
+                }
+                return Stack {
+                    name: "JavaScript (jest)".into(),
+                    command: r#"["npx", "jest", "--ci", "--reporters=default", "--reporters=jest-junit"]"#.into(),
+                    report: Some("junit.xml"),
+                    allowed: vec!["Bash(npx jest:*)".into(), "Bash(npm test:*)".into()],
+                    tests,
+                    sources: vec![src_or("**")],
+                    stub,
+                    setup: node_setup(repo),
+                    ignore: vec!["/junit.xml"],
+                    notes,
+                };
+            }
+            let mut notes = vec![];
+            if !pkg.contains("\"vitest\"") {
+                notes.push("no test runner found in package.json; the checks assume vitest (`npm i -D vitest`)".into());
+            }
+            return Stack {
+                name: "JavaScript (vitest)".into(),
+                command: r#"["npx", "vitest", "run", "--reporter=default", "--reporter=junit", "--outputFile.junit={{report}}"]"#.into(),
+                report: None,
+                allowed: vec!["Bash(npx vitest:*)".into(), "Bash(npm test:*)".into()],
+                tests,
+                sources: vec![src_or("**")],
+                stub,
+                setup: node_setup(repo),
+                ignore: vec![],
+                notes,
+            };
+        }
+        if [
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+            "Pipfile",
+        ]
+        .iter()
+        .any(|f| has(f))
+        {
+            return Stack {
+                name: "Python (pytest)".into(),
+                // -B and no:cacheprovider: pytest writes nothing into the repository.
+                // With a src/ layout, pythonpath=src makes the run's own code win over an
+                // editable install, which points at your checkout instead.
+                command: if has("src") {
+                    r#"["python3", "-B", "-m", "pytest", "-p", "no:cacheprovider", "-o", "pythonpath=src", "--junitxml={{report}}"]"#
+                } else {
+                    r#"["python3", "-B", "-m", "pytest", "-p", "no:cacheprovider", "--junitxml={{report}}"]"#
+                }
+                .into(),
+                report: None,
+                allowed: vec!["Bash(python3 -B -m pytest:*)".into(), "Bash(python3 -m pytest:*)".into(), "Bash(pytest:*)".into()],
+                tests: vec!["tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py"],
+                sources: vec![src_or("**/*.py")],
+                stub: "a body of `raise NotImplementedError`",
+                setup: None,
+                ignore: vec![],
+                notes: vec![
+                    "the checks run `python3` from PATH: run conductor with the project's virtualenv active".into(),
+                ],
+            };
+        }
+        if has("go.mod") {
+            return Stack {
+                name: "Go (gotestsum)".into(),
+                command: r#"["gotestsum", "--junitfile", "{{report}}"]"#.into(),
+                report: None,
+                allowed: vec!["Bash(gotestsum:*)".into(), "Bash(go test:*)".into(), "Bash(go build:*)".into(), "Bash(go vet:*)".into()],
+                tests: vec!["**/*_test.go", "**/testdata/**"],
+                sources: vec!["**/*.go"],
+                // A panic stops the whole test binary, so the tests after it never report.
+                stub: "a body that returns zero values (not `panic`: a panic stops the whole test binary and hides the tests after it)",
+                setup: None,
+                ignore: vec![],
+                notes: vec!["the checks read JUnit XML through gotestsum: `go install gotest.tools/gotestsum@latest`".into()],
+            };
+        }
+        let java_tests = vec!["**/src/test/**"];
+        let java_stub =
+            "a body that throws `new UnsupportedOperationException(\"not implemented\")`";
+        if has("pom.xml") {
+            return Stack {
+                name: "Java (Maven)".into(),
+                command: r#"["mvn", "-B", "-q", "-fae", "test"]"#.into(),
+                report: Some("**/target/surefire-reports/TEST-*.xml"),
+                allowed: vec!["Bash(mvn:*)".into()],
+                tests: java_tests,
+                sources: vec!["**/src/main/**"],
+                stub: java_stub,
+                setup: None,
+                ignore: vec![],
+                notes: vec![],
+            };
+        }
+        if [
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+        ]
+        .iter()
+        .any(|f| has(f))
+        {
+            let gradle = if has("gradlew") {
+                "./gradlew"
+            } else {
+                "gradle"
+            };
+            return Stack {
+                name: "JVM (Gradle)".into(),
+                command: format!(r#"["{gradle}", "test", "--continue"]"#),
+                report: Some("**/build/test-results/test/*.xml"),
+                allowed: vec![format!("Bash({gradle}:*)")],
+                tests: java_tests,
+                sources: vec!["**/src/main/**"],
+                stub: java_stub,
+                setup: None,
+                ignore: vec![],
+                notes: vec![],
+            };
+        }
+        Stack {
+            name: "an unknown stack".into(),
+            command: r#"["./run-tests", "{{report}}"]"#.into(),
+            report: None,
+            allowed: vec!["Bash(./run-tests:*)".into()],
+            tests: vec!["tests/**", "test/**"],
+            sources: vec![src_or("**")],
+            stub: "a body that fails with a \"not implemented\" error",
+                setup: None,
+            ignore: vec![],
+            notes: vec![
+                "set the test command in .conductor/workflows/build.yaml: any runner that writes JUnit XML works; put `{{report}}` where it takes the report's path".into(),
+                "check the tests and source paths in the stages' `scope`".into(),
+            ],
+        }
+    }
+
+    fn workflow(&self) -> String {
+        let setup = self
+            .setup
+            .map(|c| {
+                format!(
+                    "\n# Runs happen in a fresh checkout: install what it doesn't carry, once per run.\nsetup: {c}\n"
+                )
+            })
+            .unwrap_or_default();
+        let report = self
+            .report
+            .map(|r| format!("\n        report: {r:?}"))
+            .unwrap_or_default();
+        let command = &self.command;
+        let allowed = quoted(&self.allowed);
+        let tests = quoted(&self.tests);
+        let all = quoted(&[self.tests.clone(), self.sources.clone()].concat());
+        let sources = quoted(&self.sources);
+        format!(
+            r#"# One agent writes failing tests for the work; another makes them pass without being able
+# to touch them. Every check is run by conductor, not by the agents, and reads the test
+# runner's JUnit XML report ({name}).
+#
+# Conductor reads this file from the commit a run starts at, never from your working tree:
+# commit changes to it before they take effect.
+id: build
+version: 1
+kind: build
+
+defaults:
+  # A failed check is sent back to the agent; the second retry starts from a clean tree.
+  retries: {{ max: 2, ladder: [in_context, fresh] }}
+
+budget:
+  max_stage_wall_clock_sec: 900
+
+# Turn a passed run into a draft pull request with its receipt (`conductor deliver`).
+# deliver: {{ base: main }}
+{setup}
+stages:
+  - id: tests
+    agent:
+      kind: claude
+      allowed_tools: [{allowed}]
+    prompt_file: .conductor/prompts/tests.md
+    # Tests, plus stubs of new code so the tests can load it.
+    scope: {{ write: [{all}] }}
+    gates:
+      - {{ type: scope }}
+      # The new tests must load, and every one of them must fail for the right reason (an
+      # assertion or a "not implemented" stub, not a trivially false test). A stub that
+      # quietly implements the work would make some pass, and fail this check.
+      - type: command_assert
+        command: {command}
+        parser: junit_xml{report}
+        assert:
+          - "compiled == true"
+          - "tests_new > 0"
+          - "tests_failed == tests_new"
+          - "failures.kind all != 'trivial'"
+
+  - id: implement
+    depends_on: [tests]
+    agent:
+      kind: claude
+      allowed_tools: [{allowed}]
+    prompt_file: .conductor/prompts/implement.md
+    scope:
+      write: [{sources}]
+      frozen: [{tests}]      # the tests from the stage above are locked
+    gates:
+      - {{ type: scope }}
+      - type: command_assert
+        command: {command}
+        parser: junit_xml{report}
+        reruns: 1               # passing twice rules out a lucky run
+        # tests_new == 0: the implementer adds no tests of its own.
+        assert: ["tests_failed == 0", "tests_run > 0", "tests_new == 0"]
+      # If your CI requires formatting, lints or type checks, check them here too, so a run
+      # can't pass what CI would fail: a command that must exit 0 is
+      # `{{ type: command_assert, command: [...], parser: exit }}`. Add it to allowed_tools
+      # above so the agent can run it. (Mutation testing is Rust-only for now.)
+"#,
+            name = self.name,
+        )
+    }
+
+    fn tests_prompt(&self) -> String {
+        format!(
+            "\
+You write tests only. Write tests for the work described below, where this project keeps
+its tests. Cover normal cases, boundaries and malformed input.
+
+If the tests call something that does not exist yet, add it with its real signature and
+{stub}, so the tests load. Nothing more: do not implement anything. Every test you add must
+fail. Run the tests to confirm they load and fail.
+",
+            stub = self.stub
+        )
+    }
+}
+
+/// Installing a JavaScript project's packages, with the lockfile it has.
+fn node_setup(repo: &Path) -> Option<&'static str> {
+    Some(if repo.join("pnpm-lock.yaml").exists() {
+        r#"[["pnpm", "install", "--frozen-lockfile"]]"#
+    } else if repo.join("yarn.lock").exists() {
+        r#"[["yarn", "install", "--frozen-lockfile"]]"#
+    } else if repo.join("package-lock.json").exists() {
+        r#"[["npm", "ci"]]"#
+    } else {
+        r#"[["npm", "install"]]"#
+    })
+}
+
+const IMPLEMENT_PROMPT_ANY: &str = "\
+You implement. Make the new tests pass by changing the source code only. The tests are
+locked: do not edit them, and do not add tests of your own. Run the tests to check your work.
+";
+
 fn git(repo: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -126,16 +437,32 @@ fn git(repo: &Path, args: &[&str]) -> Option<String> {
 }
 
 pub fn init(repo: &Path) -> Result<ExitCode> {
-    if !repo.join("Cargo.toml").is_file() {
-        bail!(
-            "this repository has no Cargo.toml. conductor 0.1 checks work with `cargo test`; \
-             other languages need the JUnit XML parser, which arrives in 0.2"
+    let (workflow, tests, implement, stack) = if repo.join("Cargo.toml").is_file() {
+        let (w, t, i) = (
+            WORKFLOW.to_owned(),
+            TESTS_PROMPT.to_owned(),
+            IMPLEMENT_PROMPT.to_owned(),
         );
-    }
+        (w, t, i, None)
+    } else {
+        let s = Stack::detect(repo);
+        (
+            s.workflow(),
+            s.tests_prompt(),
+            IMPLEMENT_PROMPT_ANY.to_owned(),
+            Some(s),
+        )
+    };
+    println!(
+        "  found    {}",
+        stack
+            .as_ref()
+            .map_or("Rust (cargo test)", |s| s.name.as_str())
+    );
     let files = [
-        (".conductor/workflows/build.yaml", WORKFLOW),
-        (".conductor/prompts/tests.md", TESTS_PROMPT),
-        (".conductor/prompts/implement.md", IMPLEMENT_PROMPT),
+        (".conductor/workflows/build.yaml", workflow.as_str()),
+        (".conductor/prompts/tests.md", tests.as_str()),
+        (".conductor/prompts/implement.md", implement.as_str()),
         (".conductor/policy.yaml", POLICY),
         (".conductor/task.md", TASK),
     ];
@@ -150,20 +477,31 @@ pub fn init(repo: &Path) -> Result<ExitCode> {
         println!("  wrote    {rel}");
     }
     let ignore = repo.join(".gitignore");
-    let current = std::fs::read_to_string(&ignore).unwrap_or_default();
-    if current
-        .lines()
-        .any(|l| l.trim().trim_matches('/') == ".conductor/runs")
-    {
-        println!("  kept     .gitignore (already ignores run records)");
-    } else {
+    let mut wanted = vec!["/.conductor/runs/"];
+    wanted.extend(stack.as_ref().map(|s| s.ignore.clone()).unwrap_or_default());
+    for line in wanted {
+        let current = std::fs::read_to_string(&ignore).unwrap_or_default();
+        let bare = line.trim_matches('/');
+        if current.lines().any(|l| l.trim().trim_matches('/') == bare) {
+            println!("  kept     .gitignore (already ignores {bare})");
+            continue;
+        }
         let sep = if current.is_empty() || current.ends_with('\n') {
             ""
         } else {
             "\n"
         };
-        std::fs::write(&ignore, format!("{current}{sep}/.conductor/runs/\n"))?;
-        println!("  updated  .gitignore: run records stay out of git");
+        std::fs::write(&ignore, format!("{current}{sep}{line}\n"))?;
+        if bare == ".conductor/runs" {
+            println!("  updated  .gitignore: run records stay out of git");
+        } else {
+            println!("  updated  .gitignore: {bare}, the test report, stays out of git");
+        }
+    }
+    if let Some(s) = &stack {
+        for n in &s.notes {
+            println!("  todo     {n}");
+        }
     }
     println!(
         "\nNext:\n  1. describe the work in .conductor/task.md\n  2. commit .conductor/ and .gitignore (runs read the workflow from a commit)\n  3. conductor doctor\n  4. conductor run .conductor/workflows/build.yaml --spec .conductor/task.md"
@@ -304,6 +642,11 @@ pub fn doctor(repo: &Path, herdr: conductor_herdr::Herdr) -> Result<ExitCode> {
             Gate::CommandAssert { command, .. } => command.first().map(String::as_str),
             _ => None,
         })
+        .chain(
+            workflows
+                .iter()
+                .flat_map(|w| w.setup.iter().filter_map(|c| c.first().map(String::as_str))),
+        )
         .collect();
     for p in programs {
         match version(p, &["--version"]) {
@@ -372,6 +715,33 @@ mod tests {
         let v = wf.validate();
         assert!(v.is_ok(), "{:?}", v.errors);
         assert!(v.warnings.is_empty(), "{:?}", v.warnings);
+    }
+
+    #[test]
+    fn every_stack_starter_is_valid() {
+        let d = tempfile::tempdir().unwrap();
+        let markers: &[(&str, &str)] = &[
+            ("package.json", r#"{"devDependencies":{"vitest":"1"}}"#),
+            ("package.json", r#"{"devDependencies":{"jest":"29"}}"#),
+            ("pyproject.toml", ""),
+            ("go.mod", "module x\n"),
+            ("pom.xml", "<project/>"),
+            ("build.gradle", ""),
+            ("README", ""),
+        ];
+        let mut names = BTreeSet::new();
+        for (file, text) in markers {
+            let d = d.path().join(names.len().to_string());
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(file), text).unwrap();
+            let s = Stack::detect(&d);
+            let wf = Workflow::parse(&s.workflow()).unwrap_or_else(|e| panic!("{}: {e}", s.name));
+            let v = wf.validate();
+            assert!(v.is_ok(), "{}: {:?}", s.name, v.errors);
+            assert!(v.warnings.is_empty(), "{}: {:?}", s.name, v.warnings);
+            names.insert(s.name);
+        }
+        assert_eq!(names.len(), markers.len(), "{names:?}");
     }
 
     #[test]

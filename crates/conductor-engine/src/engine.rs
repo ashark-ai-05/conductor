@@ -9,8 +9,8 @@ use crate::live::Live;
 use crate::receipt::{self, StageRecord};
 use crate::store::{Recorder, RunDir, new_run_id};
 use crate::worktree;
-use conductor_checks::gate::{self, GateResult};
-use conductor_model::workflow::{AgentControl, Gate, Policy, Rung, Stage, Workflow};
+use conductor_checks::gate::{self, GateResult, TestCommand, run_tests};
+use conductor_model::workflow::{AgentControl, Gate, Policy, REPORT, Rung, Stage, Workflow};
 use conductor_model::{Event, Receipt, Source, Verdict};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -112,6 +112,21 @@ fn order(stages: &[Stage]) -> Vec<&Stage> {
     out
 }
 
+/// Variables `setup` commands get beyond a check's: how to reach the network, through a
+/// proxy and a private certificate authority.
+const SETUP_ENV: [&str; 10] = [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+];
+
 fn uses_new_tests(stage: &Stage) -> bool {
     stage.all_gates().any(|g| matches!(g, Gate::CommandAssert { assert, .. } if assert.iter().any(|a| a.contains("tests_new") || a.contains("new_tests"))))
 }
@@ -161,10 +176,15 @@ fn describe_gate(g: &Gate) -> String {
             } else {
                 String::new()
             };
+            // The agent may run the check itself: `{{report}}` is conductor's to fill, so the
+            // brief names a file outside the repository, where it can't be mistaken for work.
+            let shown = command
+                .join(" ")
+                .replace(REPORT, "/tmp/conductor-report.xml");
             if assert.is_empty() {
-                format!("`{}` exits 0{runs}", command.join(" "))
+                format!("`{shown}` exits 0{runs}")
             } else {
-                format!("`{}`{runs}: {}", command.join(" "), assert.join("; "))
+                format!("`{shown}`{runs}: {}", assert.join("; "))
             }
         }
         Gate::Mutation { min_score, .. } => format!(
@@ -423,7 +443,71 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let mut unmanaged_seen: BTreeSet<String> = BTreeSet::new();
     let pane_help = actions_path.as_ref().map(|_| pane_help());
 
+    // What a checkout doesn't carry (installed packages), made once for the whole run: a
+    // retry's reset keeps ignored files, so it survives. It gets the proxy settings on top of
+    // a check's environment, since installing usually means downloading.
+    let mut setup_failed = None;
+    for argv in &wf.setup {
+        let shown = argv.join(" ");
+        let e = conductor_checks::runner::run(&conductor_checks::runner::Spec {
+            argv,
+            cwd: &wt,
+            timeout: stage_timeout,
+            pass_env: &SETUP_ENV.map(String::from),
+            run_id: &run_id,
+            inherit_env: false,
+            set_env: &[],
+        });
+        let secs = e.duration_ms / 1000;
+        if e.complete() && e.exit_code == Some(0) {
+            rec.record(
+                Source::Witnessed,
+                None,
+                format!("setup `{shown}` exited 0 in {secs}s"),
+            )?;
+            continue;
+        }
+        let tail = e
+            .stderr_tail
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .map(|l| format!(": {}", l.trim()))
+            .unwrap_or_default();
+        let how = match (&e.reason, e.exit_code) {
+            (Some(r), _) => r.clone(),
+            (None, Some(c)) => format!("exited {c}"),
+            (None, None) => "was killed".into(),
+        };
+        let why = format!("setup `{shown}` {how}{tail}");
+        rec.record(Source::Witnessed, None, format!("halted: {why}"))?;
+        setup_failed = Some(why);
+        break;
+    }
+    // Setup's output must be invisible to the scope check, and survive a fresh retry's clean:
+    // ignored by git, or a lockfile the policy calls generated.
+    if setup_failed.is_none() && !wf.setup.is_empty() {
+        let head = worktree::head(&wt)?;
+        let left = conductor_checks::git::changed_files(&wt, &head).unwrap_or_default();
+        let stray: Vec<String> = conductor_checks::scope::check(&left, &[], &[], &[], &generated)
+            .map(|r| r.violations.into_iter().map(|v| v.path).collect())
+            .unwrap_or_default();
+        if !stray.is_empty() {
+            let why = format!(
+                "setup left files git doesn't ignore ({}); add them to .gitignore, or they count as the first stage's changes",
+                stray.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+            );
+            rec.record(Source::Witnessed, None, format!("halted: {why}"))?;
+            setup_failed = Some(why);
+        }
+    }
+
     for stage in order(&wf.stages) {
+        if let Some(why) = &setup_failed {
+            records.push(StageRecord::halted(stage, why));
+            run_verdict = Verdict::Unwitnessed;
+            break;
+        }
         if let Some(limit) = total_budget
             && started.elapsed() > limit
         {
@@ -461,7 +545,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         };
 
         let baseline = if uses_new_tests(stage) {
-            Some(baseline_tests(stage, &wt, &run_id, stage_timeout))
+            let scratch = dir.scratch(&stage.id, 0).join("baseline");
+            Some(baseline_tests(stage, &wt, &scratch, &run_id, stage_timeout))
         } else {
             None
         };
@@ -624,11 +709,16 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     .map(|e| e.stdout_sha256.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let hashes = if hashes.is_empty() {
+                let mut hashes = if hashes.is_empty() {
                     String::new()
                 } else {
                     format!(" [stdout {hashes}]")
                 };
+                if let Some(files) = r.tests.as_ref().map(|t| &t.report_files)
+                    && !files.is_empty()
+                {
+                    hashes.push_str(&format!(" [report {}]", files.join(", ")));
+                }
                 rec.record(
                     Source::Witnessed,
                     Some(&stage.id),
@@ -820,18 +910,22 @@ fn export_run(
     crate::otlp::export(cfg, run_id, rec.events(), dir.receipt_sha256().as_deref())
 }
 
-/// Test names present before the stage runs, so a gate can count the ones it added.
-fn baseline_tests(stage: &Stage, wt: &Path, run_id: &str, timeout: Duration) -> BTreeSet<String> {
-    let Some(Gate::CommandAssert { command, .. }) = stage
-        .all_gates()
-        .find(|g| matches!(g, Gate::CommandAssert { .. }))
-    else {
+/// Test names present before the stage runs, so a gate can count the ones it added. Read
+/// with the stage's first check of test results, the way that check will read them after.
+fn baseline_tests(
+    stage: &Stage,
+    wt: &Path,
+    scratch: &Path,
+    run_id: &str,
+    timeout: Duration,
+) -> BTreeSet<String> {
+    let Some(cmd) = stage.all_gates().find_map(TestCommand::of) else {
         return BTreeSet::new();
     };
     // The baseline must list every test, and before a stage some are expected to fail:
     // `cargo test` stops at the first failing test binary unless told not to, which would
     // leave later binaries' tests out, and make them look new afterwards.
-    let mut argv = command.clone();
+    let mut argv = cmd.argv.to_vec();
     if argv.get(1).map(String::as_str) == Some("test")
         && argv
             .first()
@@ -841,18 +935,9 @@ fn baseline_tests(stage: &Stage, wt: &Path, run_id: &str, timeout: Duration) -> 
         let at = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
         argv.insert(at, "--no-fail-fast".into());
     }
-    let e = conductor_checks::runner::run(&conductor_checks::runner::Spec {
-        argv: &argv,
-        cwd: wt,
-        timeout,
-        pass_env: &[],
-        run_id,
-        inherit_env: false,
-        set_env: &[],
-    });
-    conductor_checks::cargo_test::parse(&e.stdout_text())
-        .tests
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
+    let cmd = TestCommand { argv: &argv, ..cmd };
+    let (_, report) = run_tests(cmd, wt, scratch, 0, run_id, timeout);
+    report
+        .map(|r| r.tests.into_iter().map(|t| t.name).collect())
+        .unwrap_or_default()
 }
