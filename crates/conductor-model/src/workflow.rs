@@ -593,6 +593,24 @@ impl Workflow {
     }
 
     fn validate_stage(&self, r: &mut Report, at: &str, s: &Stage, outputs: &Outputs) {
+        // A check the agent can't run itself leaves it guessing what the check wants. One
+        // run spent 15 minutes hand-formatting files because `cargo fmt` wasn't allowed.
+        if !s.agent.allowed_tools.is_empty() {
+            for g in s.all_gates() {
+                if let Gate::CommandAssert { command, .. } = g
+                    && !agent_may_run(&s.agent.allowed_tools, command)
+                {
+                    r.warn(
+                        format!("{at}.agent.allowed_tools"),
+                        format!(
+                            "`{}` is checked, but the agent may not run it; add `Bash({}:*)` so it can check its own work",
+                            command.join(" "),
+                            command.iter().take(2).cloned().collect::<Vec<_>>().join(" ")
+                        ),
+                    );
+                }
+            }
+        }
         if s.agent.kind == "script" && s.agent.command.is_empty() {
             r.error(
                 format!("{at}.agent.command"),
@@ -845,6 +863,28 @@ fn check_timeout(r: &mut Report, at: impl Into<String>, t: u64) {
     }
 }
 
+/// Whether Claude Code's `allowed_tools` let an agent run `command`: a `Bash` entry whose
+/// pattern (`Bash(cargo test:*)`, `Bash(cargo fmt)`, `Bash`) covers the command line.
+fn agent_may_run(allowed: &[String], command: &[String]) -> bool {
+    let line = command.join(" ");
+    allowed.iter().any(|t| {
+        let t = t.trim();
+        if t == "Bash" || t == "Bash(*)" {
+            return true;
+        }
+        let Some(pattern) = t.strip_prefix("Bash(").and_then(|p| p.strip_suffix(')')) else {
+            return false;
+        };
+        match pattern
+            .strip_suffix(":*")
+            .or_else(|| pattern.strip_suffix('*'))
+        {
+            Some(prefix) => line.starts_with(prefix.trim_end()),
+            None => line == pattern,
+        }
+    })
+}
+
 /// `{{stages.<stage>.outputs.<output>.path}}` references in a string.
 fn referenced_outputs(text: &str) -> Vec<(String, String)> {
     templates(text)
@@ -943,6 +983,49 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/build.yaml");
+
+    #[test]
+    fn a_check_the_agent_may_not_run_is_flagged() {
+        let allowed = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let cmd = |c: &str| c.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let a = allowed(&["Bash(cargo test:*)", "Read"]);
+        assert!(agent_may_run(&a, &cmd("cargo test --workspace")));
+        assert!(!agent_may_run(&a, &cmd("cargo fmt --all --check")));
+        assert!(agent_may_run(
+            &allowed(&["Bash"]),
+            &cmd("cargo fmt --all --check")
+        ));
+        assert!(agent_may_run(
+            &allowed(&["Bash(cargo fmt --all --check)"]),
+            &cmd("cargo fmt --all --check")
+        ));
+
+        let wf = format!(
+            "{}\n      - {{ type: command_assert, command: [\"cargo\", \"fmt\", \"--all\", \"--check\"], parser: exit }}\n",
+            r#"id: w
+version: 1
+kind: build
+stages:
+  - id: s
+    agent: { kind: claude, allowed_tools: ["Bash(cargo test:*)"] }
+    scope: { write: ["src/**"] }
+    gates:
+      - type: command_assert
+        command: ["cargo", "test"]
+        parser: cargo_json
+        assert: ["tests_failed == 0"]"#
+        );
+        let v = Workflow::parse(&wf).unwrap().validate();
+        let msgs: Vec<&str> = v.warnings.iter().map(|w| w.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("`cargo fmt --all --check` is checked, but the agent may not run it; add `Bash(cargo fmt:*)`")),
+            "{msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("`cargo test` is checked")),
+            "{msgs:?}"
+        );
+    }
 
     #[test]
     fn an_implementer_that_could_write_its_own_tests_is_flagged() {
