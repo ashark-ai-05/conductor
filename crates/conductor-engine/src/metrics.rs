@@ -455,6 +455,13 @@ fn median(metrics: &[Metric], name: &str, key: &str, value: &str) -> Option<f64>
     })
 }
 
+/// The runs screen's three headline numbers, computed from every run recorded in the
+/// repository: how many passed, how often a check caught the agent, and total spend.
+/// `None` when the repository has no recorded runs.
+pub fn headline_stats(_repo: &std::path::Path) -> Option<[(String, String); 3]> {
+    todo!()
+}
+
 /// Many runs' metrics, as `conductor stats` prints them.
 pub fn summary(m: &[Metric]) -> String {
     let t = |name, f: &[(&str, &str)]| total(m, name, f);
