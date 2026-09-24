@@ -1,0 +1,83 @@
+{
+  "run_id": "0MUFI083Z2U",
+  "work": "Runs-screen headline numbers from run metrics",
+  "kind": "build",
+  "checks": [
+    {
+      "claim": "Only allowed files changed (tests)",
+      "verdict": "passed",
+      "detail": "4 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests failed before the change, for the right reason",
+      "verdict": "passed",
+      "detail": "159 passed, 8 failed; every assertion held",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Only allowed files changed (implement)",
+      "verdict": "passed",
+      "detail": "3 file(s) changed, all within scope",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests pass after the change, on every run",
+      "verdict": "passed",
+      "detail": "167 passed, 0 failed; every assertion held on all 2 runs",
+      "source": "witnessed"
+    },
+    {
+      "claim": "Tests catch injected bugs",
+      "verdict": "passed",
+      "detail": "caught 9 of 10 injected bugs in 3 files · 0.90, needs 0.60",
+      "source": "witnessed"
+    }
+  ],
+  "survivors": [
+    {
+      "at": "src/main.rs:535",
+      "change": "replace <impl conductor_tui::app::RunSource for RepoRuns>::stats -> Option<[(String, String); 3]> with None"
+    }
+  ],
+  "not_checked": [
+    "the agent could read the whole machine: no sandbox"
+  ],
+  "how": [
+    [
+      "stages",
+      "tests · claude → implement · claude"
+    ],
+    [
+      "where",
+      "headless · worktree branch conductor/0MUFI083Z2U"
+    ],
+    [
+      "agent actions",
+      "120 tool calls observed · 122 turns"
+    ],
+    [
+      "tokens",
+      "9662788 measured · $3.11"
+    ],
+    [
+      "wall clock",
+      "14m16s"
+    ],
+    [
+      "trace",
+      "3d1b6a4965dafd92939c19cf06dbde16 · `conductor trace 0MUFI083Z2U`"
+    ]
+  ],
+  "integrity": {
+    "chain_head": "sha256:621bc9067866d223668983bb7e09c87cbd944065759c3ec729896f6c3367c5af",
+    "anchored_in": "9bd4036104ba",
+    "signed": false,
+    "reproduces": true,
+    "trace_id": null
+  },
+  "also_at": [
+    ".conductor/runs/0MUFI083Z2U/receipt.json",
+    "conductor receipt 0MUFI083Z2U"
+  ]
+}
