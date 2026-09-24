@@ -299,7 +299,10 @@ pub fn total(metrics: &[Metric], name: &str, filter: &[(&str, &str)]) -> f64 {
             Value::Double(d) => *d,
             Value::Observations(o) => o.len() as f64,
         })
-        .sum()
+        .sum::<f64>()
+        // A sum over no points is `-0.0` (fold's initial value combined with no terms), which
+        // would otherwise flip the sign of formatted zeros like "-0%" or "-$0.00".
+        + 0.0
 }
 
 /// The distinct values one attribute takes in a metric.
@@ -458,8 +461,40 @@ fn median(metrics: &[Metric], name: &str, key: &str, value: &str) -> Option<f64>
 /// The runs screen's three headline numbers, computed from every run recorded in the
 /// repository: how many passed, how often a check caught the agent, and total spend.
 /// `None` when the repository has no recorded runs.
-pub fn headline_stats(_repo: &std::path::Path) -> Option<[(String, String); 3]> {
-    todo!()
+pub fn headline_stats(repo: &std::path::Path) -> Option<[(String, String); 3]> {
+    let ids = crate::list_runs(repo);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut all = Vec::new();
+    for id in &ids {
+        let dir = crate::store::RunDir::for_run(repo, id);
+        if let Ok(events) = dir.read_events() {
+            let t = crate::trace::build(id, &events);
+            merge(&mut all, collect(&t, &events));
+        }
+    }
+    let runs = total(&all, "conductor.runs", &[]);
+    let passed = total(&all, "conductor.runs", &[("verdict", "passed")]);
+    let finished = total(&all, "conductor.attempts", &[("outcome", "passed")])
+        + total(&all, "conductor.attempts", &[("outcome", "check_failed")]);
+    let caught = total(&all, "conductor.catches", &[]);
+    let cost = total(&all, "conductor.cost", &[]);
+    let tokens = total(&all, "conductor.tokens", &[]);
+    Some([
+        (
+            format!("{passed:.0} of {runs:.0} passed"),
+            "runs recorded in this repository".to_string(),
+        ),
+        (
+            format!("{} caught", pct(caught, finished)),
+            "the agent said done, a check said no".to_string(),
+        ),
+        (
+            format!("${cost:.2}"),
+            format!("{} tokens across all runs", human(tokens)),
+        ),
+    ])
 }
 
 /// Many runs' metrics, as `conductor stats` prints them.
