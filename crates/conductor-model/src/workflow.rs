@@ -31,6 +31,10 @@ pub struct Workflow {
     pub budget: Budget,
     #[serde(default)]
     pub defaults: Defaults,
+    /// Commands run once in the run's fresh worktree before any stage, for what a checkout
+    /// doesn't carry: `[["npm", "ci"]]`. Each must exit 0, or the run halts.
+    #[serde(default)]
+    pub setup: Vec<Vec<String>>,
     pub stages: Vec<Stage>,
     #[serde(default)]
     pub teardown: Vec<Teardown>,
@@ -362,6 +366,11 @@ pub enum Gate {
         assert: Vec<String>,
         #[serde(default)]
         reruns: u32,
+        /// For `parser: junit_xml`, where the command writes its report, when the command
+        /// can't be told (`{{report}}` in the command is the better way): a path or glob
+        /// relative to the repository, such as `target/surefire-reports/*.xml`.
+        #[serde(default)]
+        report: Option<String>,
     },
     Mutation {
         tool: MutationTool,
@@ -382,6 +391,10 @@ impl Gate {
         }
     }
 }
+
+/// In a `junit_xml` check's command, the path of a fresh file conductor reads the report
+/// from, outside the repository.
+pub const REPORT: &str = "{{report}}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -484,6 +497,11 @@ impl Workflow {
 
         if self.id.trim().is_empty() {
             r.error("id", "must not be empty");
+        }
+        for (i, argv) in self.setup.iter().enumerate() {
+            if argv.first().is_none_or(|p| p.trim().is_empty()) {
+                r.error(format!("setup[{i}]"), "must name a program to run");
+            }
         }
         if self.version != 1 {
             r.error(
@@ -698,9 +716,47 @@ impl Workflow {
                     reruns,
                     parser,
                     assert,
+                    report,
                 } => {
                     if command.is_empty() || command[0].trim().is_empty() {
                         r.error(format!("{gat}.command"), "must name a program to run");
+                    }
+                    let templated = command.iter().any(|a| a.contains(REPORT));
+                    match (parser, templated, report) {
+                        (Parser::JunitXml, false, None) => r.error(
+                            format!("{gat}.command"),
+                            format!(
+                                "`parser: junit_xml` needs to know where the report goes: put `{REPORT}` \
+                                 in the command where the file path belongs, or name it with `report:`"
+                            ),
+                        ),
+                        (Parser::JunitXml, true, Some(_)) => r.error(
+                            format!("{gat}.report"),
+                            format!("the command already writes to `{REPORT}`; drop `report:`"),
+                        ),
+                        (Parser::JunitXml, _, _) => {}
+                        (_, true, _) => r.error(
+                            format!("{gat}.command"),
+                            format!("`{REPORT}` only means something with `parser: junit_xml`"),
+                        ),
+                        (_, _, Some(_)) => r.error(
+                            format!("{gat}.report"),
+                            "`report:` only applies to `parser: junit_xml`",
+                        ),
+                        _ => {}
+                    }
+                    if let Some(p) = report {
+                        if p.starts_with('/') || p.split('/').any(|c| c == "..") {
+                            r.error(
+                                format!("{gat}.report"),
+                                "must be a path inside the repository",
+                            );
+                        } else if Glob::new(p).is_err() {
+                            r.error(
+                                format!("{gat}.report"),
+                                format!("`{p}` is not a valid path pattern"),
+                            );
+                        }
                     }
                     if *parser == Parser::Exit && !assert.is_empty() {
                         r.error(
@@ -983,6 +1039,55 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/build.yaml");
+
+    #[test]
+    fn a_junit_check_must_say_where_its_report_goes() {
+        let errors = |gate: &str, setup: &str| {
+            let wf = format!(
+                "id: w\nversion: 1\nkind: build\nsetup: {setup}\nstages:\n  - id: s\n    agent: {{ kind: script, command: [\"true\"] }}\n    gates:\n      - {gate}\n"
+            );
+            Workflow::parse(&wf)
+                .unwrap()
+                .validate()
+                .errors
+                .into_iter()
+                .map(|e| e.message)
+                .collect::<Vec<_>>()
+        };
+        let ok = |gate: &str| assert_eq!(errors(gate, "[]"), Vec::<String>::new(), "{gate}");
+        ok(
+            r#"{ type: command_assert, command: ["pytest", "--junitxml={{report}}"], parser: junit_xml }"#,
+        );
+        ok(
+            r#"{ type: command_assert, command: ["mvn", "test"], parser: junit_xml, report: "**/surefire-reports/*.xml" }"#,
+        );
+        let bad = |gate: &str, says: &str| {
+            let e = errors(gate, "[]");
+            assert!(e.iter().any(|m| m.contains(says)), "{gate}: {e:?}");
+        };
+        bad(
+            r#"{ type: command_assert, command: ["pytest"], parser: junit_xml }"#,
+            "needs to know where the report goes",
+        );
+        bad(
+            r#"{ type: command_assert, command: ["pytest", "--junitxml={{report}}"], parser: junit_xml, report: "r.xml" }"#,
+            "drop `report:`",
+        );
+        bad(
+            r#"{ type: command_assert, command: ["cargo", "test", "{{report}}"], parser: cargo_json }"#,
+            "only means something with `parser: junit_xml`",
+        );
+        bad(
+            r#"{ type: command_assert, command: ["make"], parser: exit, report: "r.xml" }"#,
+            "only applies to `parser: junit_xml`",
+        );
+        bad(
+            r#"{ type: command_assert, command: ["mvn"], parser: junit_xml, report: "../elsewhere/*.xml" }"#,
+            "inside the repository",
+        );
+        let e = errors("{ type: scope }", "[[]]");
+        assert!(e.iter().any(|m| m == "must name a program to run"), "{e:?}");
+    }
 
     #[test]
     fn a_check_the_agent_may_not_run_is_flagged() {

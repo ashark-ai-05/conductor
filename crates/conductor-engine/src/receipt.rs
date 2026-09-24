@@ -153,6 +153,16 @@ pub fn build(
     let mut not_checked = vec!["the agent could read the whole machine: no sandbox".to_string()];
 
     for s in stages {
+        // A stage halted before any check (its agent couldn't start, setup failed): the run
+        // proved nothing, and must say so rather than read as still pending.
+        if s.gates.is_empty() && s.verdict == Verdict::Unwitnessed {
+            checks.push(CheckRow {
+                claim: format!("The `{}` stage ran", s.stage),
+                verdict: Verdict::Unwitnessed,
+                detail: s.notes.first().cloned().unwrap_or_default(),
+                source: Source::Witnessed,
+            });
+        }
         for g in &s.gates {
             checks.push(CheckRow {
                 claim: claim(wf, &s.stage, g),

@@ -33,7 +33,9 @@ pub const TAIL_LINES: usize = 60;
 /// for the pipes to close once the command has exited.
 const GRACE: Duration = Duration::from_secs(5);
 
-/// Ambient variables a command may inherit. Everything else is dropped.
+/// Ambient variables a command may inherit. Everything else is dropped. Beyond the basics,
+/// these say where a language's toolchain and caches live, so a check finds the same
+/// compiler, virtualenv or module cache the developer uses; none of them carries a secret.
 pub fn inherits(key: &str) -> bool {
     matches!(
         key,
@@ -44,9 +46,36 @@ pub fn inherits(key: &str) -> bool {
             | "SHELL"
             | "TMPDIR"
             | "USER"
+            | "XDG_CACHE_HOME"
+            // Rust
             | "CARGO_HOME"
             | "RUSTUP_HOME"
             | "RUSTUP_TOOLCHAIN"
+            // Go
+            | "GOROOT"
+            | "GOPATH"
+            | "GOCACHE"
+            | "GOMODCACHE"
+            | "GOTOOLCHAIN"
+            // Python
+            | "VIRTUAL_ENV"
+            | "CONDA_PREFIX"
+            | "PYENV_ROOT"
+            | "PYENV_VERSION"
+            // JavaScript
+            | "NVM_DIR"
+            | "PNPM_HOME"
+            | "VOLTA_HOME"
+            // JVM
+            | "JAVA_HOME"
+            | "GRADLE_USER_HOME"
+            | "MAVEN_HOME"
+            | "M2_HOME"
+            // .NET, Ruby
+            | "DOTNET_ROOT"
+            | "GEM_HOME"
+            | "GEM_PATH"
+            | "RBENV_ROOT"
     ) || key.starts_with("LC_")
 }
 

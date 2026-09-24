@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="2" errors="0" time="0.006141">
+	<testsuite tests="3" failures="2" time="0.006000" name="example.com/clamp" timestamp="2026-09-24T22:21:13Z">
+		<properties>
+			<property name="go.version" value="go1.24.7 linux/amd64"></property>
+		</properties>
+		<testcase classname="example.com/clamp" name="TestCapsHigh" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestCapsHigh&#xA;    clamp_test.go:13: got 50, want 10&#xA;--- FAIL: TestCapsHigh (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="example.com/clamp" name="TestNew" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestNew&#xA;--- FAIL: TestNew (0.00s)&#xA;panic: not implemented [recovered]&#xA;&#x9;panic: not implemented&#xA;&#xA;goroutine 8 [running]:&#xA;testing.tRunner.func1.2({0x5477a0, 0x5af8c0})&#xA;&#x9;/usr/local/go1.24.7/src/testing/testing.go:1734 +0x21c&#xA;testing.tRunner.func1()&#xA;&#x9;/usr/local/go1.24.7/src/testing/testing.go:1737 +0x35e&#xA;panic({0x5477a0?, 0x5af8c0?})&#xA;&#x9;/usr/local/go1.24.7/src/runtime/panic.go:792 +0x132&#xA;example.com/clamp.New(...)&#xA;&#x9;/work/clamp.go:5&#xA;example.com/clamp.TestNew(0xc000003dc0?)&#xA;&#x9;/work/clamp_test.go:18 +0x25&#xA;testing.tRunner(0xc000003dc0, 0x5843d0)&#xA;&#x9;/usr/local/go1.24.7/src/testing/testing.go:1792 +0xf4&#xA;created by testing.(*T).Run in goroutine 1&#xA;&#x9;/usr/local/go1.24.7/src/testing/testing.go:1851 +0x413&#xA;</failure>
+		</testcase>
+		<testcase classname="example.com/clamp" name="TestInRange" time="0.000000"></testcase>
+	</testsuite>
+</testsuites>

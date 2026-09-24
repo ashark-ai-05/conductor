@@ -422,3 +422,116 @@ fn the_policy_can_turn_lockfile_allowance_off() {
         out.receipt.checks
     );
 }
+
+/// A one-stage workflow whose agent writes `notes/out.md`, with `setup` and `gates` as given.
+fn with_setup(setup: &str, gates: &str) -> (tempfile::TempDir, conductor_engine::Outcome) {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    fs::create_dir_all(p.join(".conductor/workflows")).unwrap();
+    fs::write(
+        p.join(".gitignore"),
+        "/.conductor/runs/\n/.test-conductor-home/\n/deps/\n/reports/\n",
+    )
+    .unwrap();
+    fs::write(
+        p.join(".conductor/workflows/build.yaml"),
+        format!(
+            r#"id: setup
+version: 1
+kind: build
+setup: {setup}
+defaults:
+  retries: {{ max: 0, ladder: [] }}
+stages:
+  - id: write
+    agent: {{ kind: script, command: ["sh", "-c", "mkdir -p notes && echo hi > notes/out.md"] }}
+    scope: {{ write: ["notes/**"] }}
+    gates:
+{gates}
+"#
+        ),
+    )
+    .unwrap();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "t"]);
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "base"]);
+    let out = run(options(p)).expect("run completes");
+    (d, out)
+}
+
+fn said(out: &conductor_engine::Outcome, what: &str) -> bool {
+    out.dir
+        .read_events()
+        .unwrap()
+        .iter()
+        .any(|e| e.what.contains(what))
+}
+
+#[test]
+fn setup_prepares_the_checkout_once_for_the_checks() {
+    let (_d, out) = with_setup(
+        r#"[["sh", "-c", "mkdir -p deps && echo 1 > deps/installed"]]"#,
+        r#"      - { type: command_assert, command: ["test", "-f", "deps/installed"], parser: exit }"#,
+    );
+    assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    assert!(said(&out, "setup `sh -c mkdir -p deps"));
+}
+
+#[test]
+fn a_failed_setup_halts_the_run_before_any_agent() {
+    let (_d, out) = with_setup(
+        r#"[["sh", "-c", "echo registry unreachable >&2; exit 3"]]"#,
+        "      - { type: scope }",
+    );
+    assert_eq!(out.verdict, Verdict::Unwitnessed);
+    assert!(said(&out, "halted: setup `sh -c"));
+    assert!(said(&out, "exited 3: registry unreachable"));
+    assert!(!said(&out, "attempt 1"));
+}
+
+#[test]
+fn setup_output_git_would_see_halts_the_run() {
+    let (_d, out) = with_setup(r#"[["touch", "stray.txt"]]"#, "      - { type: scope }");
+    assert_eq!(out.verdict, Verdict::Unwitnessed);
+    assert!(said(
+        &out,
+        "setup left files git doesn't ignore (stray.txt)"
+    ));
+}
+
+/// A report left in place from before (here by setup) is never read as the check's: the
+/// check's command wrote nothing, so no tests ran.
+#[test]
+fn a_junit_report_is_always_fresh() {
+    let stale = r#"<testsuite name="s"><testcase classname="s" name="ok"/></testsuite>"#;
+    let (_d, out) = with_setup(
+        &format!(
+            "[[\"sh\", \"-c\", {:?}]]",
+            format!("mkdir -p reports && echo '{stale}' > reports/TEST-s.xml")
+        ),
+        r#"      - type: command_assert
+        command: ["sh", "-c", "exit 1"]
+        parser: junit_xml
+        report: "reports/*.xml"
+        assert: ["tests_run > 0"]"#,
+    );
+    assert_eq!(out.verdict, Verdict::Failed, "{:#?}", out.receipt);
+    assert!(said(&out, "the tests did not load or build (1 errors)"));
+
+    let fresh = r#"<testsuite name='s'><testcase classname='s' name='ok'/></testsuite>"#;
+    let (_d, out) = with_setup(
+        "[]",
+        &format!(
+            r#"      - type: command_assert
+        command: ["sh", "-c", {:?}]
+        parser: junit_xml
+        report: "reports/*.xml"
+        assert: ["tests_run == 1", "tests_failed == 0"]"#,
+            format!("mkdir -p reports && echo \"{fresh}\" > reports/TEST-s.xml")
+        ),
+    );
+    assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    assert!(said(&out, "[report reports/TEST-s.xml sha256:"));
+}

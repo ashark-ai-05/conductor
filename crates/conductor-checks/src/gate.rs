@@ -7,11 +7,12 @@
 use crate::assert::{self, Evaluated, Fact, Facts};
 use crate::cargo_test::{self, Outcome, TestReport};
 use crate::git;
+use crate::junit;
 use crate::mutants::{self, MutationReport};
 use crate::runner::{self, Execution};
 use crate::scope::{self, ScopeReport};
 use conductor_model::Verdict;
-use conductor_model::workflow::{Gate, MutationTool, Parser};
+use conductor_model::workflow::{Gate, MutationTool, Parser, REPORT};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -107,7 +108,8 @@ pub fn evaluate(gate: &Gate, ctx: &Context) -> GateResult {
             parser,
             assert,
             reruns,
-        } => command_assert(command, *parser, assert, *reruns, ctx),
+            report,
+        } => command_assert(command, *parser, assert, *reruns, report.as_deref(), ctx),
         Gate::Mutation {
             tool,
             in_diff,
@@ -253,32 +255,198 @@ pub fn test_facts(
     f
 }
 
+/// A command whose output says what each test did.
+#[derive(Debug, Clone, Copy)]
+pub struct TestCommand<'a> {
+    pub argv: &'a [String],
+    pub parser: Parser,
+    /// For JUnit, the `report:` pattern, when the command doesn't take `{{report}}`.
+    pub report: Option<&'a str>,
+}
+
+impl<'a> TestCommand<'a> {
+    /// The stage's check that reads test results, if it has one.
+    pub fn of(gate: &'a Gate) -> Option<Self> {
+        match gate {
+            Gate::CommandAssert {
+                command,
+                parser: parser @ (Parser::CargoJson | Parser::JunitXml),
+                report,
+                ..
+            } => Some(TestCommand {
+                argv: command,
+                parser: *parser,
+                report: report.as_deref(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Runs a test command and reads what it did. `Err` means a report was there but isn't
+/// JUnit, which nobody can read a verdict from. `scratch` is where a `{{report}}` file goes;
+/// `run` tells reruns' files apart.
+pub fn run_tests(
+    cmd: TestCommand,
+    cwd: &Path,
+    scratch: &Path,
+    run: usize,
+    run_id: &str,
+    timeout: Duration,
+) -> (Execution, Result<TestReport, String>) {
+    let spec = |argv: &[String]| {
+        runner::run(&runner::Spec {
+            argv,
+            cwd,
+            timeout,
+            pass_env: &[],
+            run_id,
+            inherit_env: false,
+            set_env: &[],
+        })
+    };
+    if cmd.parser == Parser::CargoJson {
+        let exec = spec(cmd.argv);
+        let report = cargo_test::parse(&exec.stdout_text());
+        return (exec, Ok(report));
+    }
+    // A report left over from an earlier run must never be read as this one's, so the file
+    // is always fresh: conductor's own, or deleted before the command runs.
+    let own = scratch.join(format!("junit-{run}.xml"));
+    let (argv, files): (Vec<String>, Box<dyn Fn() -> Vec<PathBuf>>) = match cmd.report {
+        None => {
+            let _ = std::fs::create_dir_all(scratch);
+            let _ = std::fs::remove_file(&own);
+            let at = own.to_string_lossy().into_owned();
+            let argv = cmd.argv.iter().map(|a| a.replace(REPORT, &at)).collect();
+            let own = own.clone();
+            (
+                argv,
+                Box::new(move || own.is_file().then(|| own.clone()).into_iter().collect()),
+            )
+        }
+        Some(pattern) => {
+            for stale in matching(cwd, pattern) {
+                let _ = std::fs::remove_file(stale);
+            }
+            let (cwd, pattern) = (cwd.to_owned(), pattern.to_owned());
+            (
+                cmd.argv.to_vec(),
+                Box::new(move || matching(&cwd, &pattern)),
+            )
+        }
+    };
+    let exec = spec(&argv);
+    let files = files();
+    let shown = cmd.argv.join(" ");
+    if files.is_empty() {
+        let tail = exec
+            .stderr_tail
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty());
+        let code = exec
+            .exit_code
+            .map_or("without a code".into(), |c| c.to_string());
+        let report = TestReport {
+            compiled: Some(false),
+            compile_errors: 1,
+            compile_messages: vec![format!(
+                "`{shown}` exited {code} and wrote no JUnit report{}, so no tests ran{}",
+                cmd.report.map(|p| format!(" at {p}")).unwrap_or_default(),
+                tail.map(|t| format!(": {}", t.trim())).unwrap_or_default()
+            )],
+            ..TestReport::default()
+        };
+        return (exec, Ok(report));
+    }
+    let mut report = TestReport::default();
+    for f in &files {
+        // A `report:` file by its place in the repository; conductor's own by its name.
+        let shown_path = match f.strip_prefix(cwd) {
+            Ok(rel) => rel.display().to_string(),
+            Err(_) => f
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let bytes = match std::fs::read(f) {
+            Ok(b) => b,
+            Err(e) => return (exec, Err(format!("{shown_path} could not be read: {e}"))),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        match junit::parse(&text) {
+            Ok(r) => junit::merge(&mut report, r),
+            Err(e) => {
+                return (
+                    exec,
+                    Err(format!("{shown_path} is not a JUnit XML report: {e}")),
+                );
+            }
+        }
+        report.report_files.push(format!(
+            "{shown_path} sha256:{}",
+            hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
+        ));
+    }
+    (exec, Ok(report))
+}
+
+/// Files under `root` that `pattern` matches, walking only from the pattern's literal
+/// leading directories (`target/surefire-reports/*.xml` reads one directory).
+fn matching(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let Ok(glob) = globset::Glob::new(pattern) else {
+        return vec![];
+    };
+    let m = glob.compile_matcher();
+    let literal: PathBuf = pattern
+        .split('/')
+        .take_while(|c| !c.contains(['*', '?', '[', '{']))
+        .collect();
+    let mut out = Vec::new();
+    let mut todo = vec![root.join(&literal)];
+    while let Some(p) = todo.pop() {
+        if p.is_file() {
+            if p.strip_prefix(root).is_ok_and(|rel| m.is_match(rel)) {
+                out.push(p);
+            }
+        } else if let Ok(rd) = std::fs::read_dir(&p) {
+            for e in rd.flatten() {
+                // A symlinked directory can loop (pnpm's node_modules is full of them).
+                let linked_dir = e.file_type().is_ok_and(|t| t.is_symlink()) && e.path().is_dir();
+                if e.file_name() != ".git" && !linked_dir {
+                    todo.push(e.path());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 fn command_assert(
     command: &[String],
     parser: Parser,
     asserts: &[String],
     reruns: u32,
+    report: Option<&str>,
     ctx: &Context,
 ) -> GateResult {
     const NAME: &str = "command_assert";
     if parser == Parser::Exit {
         return exit_check(command, reruns, ctx);
     }
-    if parser == Parser::JunitXml {
-        return GateResult::unwitnessed(NAME, "the junit_xml parser arrives in v0.2");
-    }
+    let cmd = TestCommand {
+        argv: command,
+        parser,
+        report,
+    };
     let mut result = GateResult::new(NAME, Verdict::Pending, "");
     let mut outcomes = Vec::new();
     for run in 0..=reruns as usize {
-        let exec = runner::run(&runner::Spec {
-            argv: command,
-            cwd: ctx.worktree,
-            timeout: ctx.timeout,
-            pass_env: &[],
-            run_id: ctx.run_id,
-            inherit_env: false,
-            set_env: &[],
-        });
+        let (exec, report) =
+            run_tests(cmd, ctx.worktree, ctx.scratch, run, ctx.run_id, ctx.timeout);
         if !exec.complete() {
             let why = exec
                 .reason
@@ -289,7 +457,15 @@ fn command_assert(
             result.detail = format!("`{}` could not be witnessed: {why}", command.join(" "));
             return result;
         }
-        let report = cargo_test::parse(&exec.stdout_text());
+        let report = match report {
+            Ok(r) => r,
+            Err(why) => {
+                result.executions.push(exec);
+                result.verdict = Verdict::Unwitnessed;
+                result.detail = why;
+                return result;
+            }
+        };
         let facts = test_facts(&report, exec.exit_code, ctx.baseline_tests);
         let mut all_hold = true;
         for a in asserts {
@@ -327,7 +503,12 @@ fn command_assert(
         .tests
         .as_ref()
         .map(|t| {
-            if t.compiled == Some(false) {
+            if t.compiled == Some(false) && parser == Parser::JunitXml {
+                format!(
+                    "the tests did not load or build ({} errors)",
+                    t.compile_errors
+                )
+            } else if t.compiled == Some(false) {
                 format!("does not compile ({} errors)", t.compile_errors)
             } else {
                 format!(
@@ -577,6 +758,33 @@ mod tests {
     }
 
     #[test]
+    fn report_patterns_find_files_without_following_linked_directories() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        for f in [
+            "a/target/surefire-reports/TEST-x.xml",
+            "b/target/surefire-reports/TEST-y.xml",
+            "b/target/other.xml",
+        ] {
+            fs::create_dir_all(r.join(f).parent().unwrap()).unwrap();
+            fs::write(r.join(f), "").unwrap();
+        }
+        std::os::unix::fs::symlink(r, r.join("a/loop")).unwrap();
+        let found: Vec<_> = matching(r, "**/target/surefire-reports/TEST-*.xml")
+            .into_iter()
+            .map(|p| p.strip_prefix(r).unwrap().display().to_string())
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "a/target/surefire-reports/TEST-x.xml",
+                "b/target/surefire-reports/TEST-y.xml"
+            ]
+        );
+        assert_eq!(matching(r, "b/target/other.xml").len(), 1);
+    }
+
+    #[test]
     fn a_diff_names_the_sources_mutation_should_cover() {
         let diff = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@\n+x\n\
                     diff --git a/crates/e/src/m.rs b/crates/e/src/m.rs\n+++ b/crates/e/src/m.rs\n\
@@ -716,6 +924,7 @@ mod tests {
             parser: Parser::CargoJson,
             assert: asserts.iter().map(|s| s.to_string()).collect(),
             reruns,
+            report: None,
         }
     }
 

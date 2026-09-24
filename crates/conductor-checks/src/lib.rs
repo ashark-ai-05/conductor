@@ -9,6 +9,7 @@ pub mod assert;
 pub mod cargo_test;
 pub mod gate;
 pub mod git;
+pub mod junit;
 pub mod mutants;
 pub mod runner;
 pub mod scope;

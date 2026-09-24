@@ -5,14 +5,16 @@ in [herdr](https://github.com/ogulcancelik/herdr) panes when you want to watch, 
 in CI and overnight. It checks their work with checks the agents can't touch. Every run ends
 in a receipt that says what was proven, by which check, and what was not checked.
 
-**Status: v0.1.** It runs build workflows on Rust projects, with `claude` agents.
+**Status: v0.1.** It runs build workflows on any project whose tests can write JUnit XML
+(pytest, jest, vitest, go via gotestsum, Maven, Gradle, and most others), and reads
+`cargo test` directly. Agents are `claude`.
 
 ## Try it
 
 ```bash
 cargo install --path .
-cd your-rust-project
-conductor init        # a starter workflow, prompts, policy and task file
+cd your-project
+conductor init        # a starter workflow for your stack, prompts, policy and task file
 $EDITOR .conductor/task.md
 git add .conductor .gitignore && git commit -m "conductor"
 conductor doctor      # is everything a run needs here?
@@ -20,8 +22,28 @@ conductor run .conductor/workflows/build.yaml --spec .conductor/task.md
 ```
 
 The starter workflow has two stages. One agent writes failing tests for the task. A second
-agent makes them pass without being able to touch them. Conductor then checks that the
-tests catch bugs it injects into the change.
+agent makes them pass without being able to touch them. On Rust, conductor then checks that
+the tests catch bugs it injects into the change (mutation testing for other languages is
+not wired up yet).
+
+### Other languages
+
+The test checks read JUnit XML, so nothing about them is language-specific. `init` detects
+Rust, JavaScript (vitest, jest), Python (pytest), Go, Maven and Gradle, and otherwise
+writes a starter to fill in. A check names where its report goes one of two ways:
+
+```yaml
+# conductor gives the command a fresh file outside the repository
+- { type: command_assert, command: ["pytest", "--junitxml={{report}}"], parser: junit_xml,
+    assert: ["tests_failed == 0", "tests_run > 0"] }
+# or reads the runner's own report files, deleting old ones first
+- { type: command_assert, command: ["mvn", "test"], parser: junit_xml,
+    report: "**/target/surefire-reports/TEST-*.xml", assert: ["tests_failed == 0"] }
+```
+
+Runs happen in a fresh git checkout, so a workflow's `setup:` installs what a checkout
+doesn't carry, once per run: `setup: [["npm", "ci"]]`. What setup writes must be ignored by
+git (`node_modules/`), or the run halts rather than count it as an agent's change.
 
 ## Commands
 
@@ -83,7 +105,7 @@ cut to their first word unless `CONDUCTOR_OTLP_CONTENT=1`. `conductor trace` and
 | Path | What |
 |---|---|
 | `crates/conductor-model` | Workflows and validation, the evidence chain, receipts, UI view models |
-| `crates/conductor-checks` | Checks: scope, command assertions over cargo test output, mutation testing |
+| `crates/conductor-checks` | Checks: scope, command assertions over test results (cargo, JUnit XML), mutation testing |
 | `crates/conductor-engine` | Runs, retries, worktrees, receipts, herdr and headless executors, traces, metrics, delivery |
 | `crates/conductor-herdr` | The herdr CLI driver |
 | `crates/conductor-tui` | The Ratatui interface |
