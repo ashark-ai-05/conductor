@@ -302,6 +302,14 @@ pub fn total(metrics: &[Metric], name: &str, filter: &[(&str, &str)]) -> f64 {
         .sum()
 }
 
+/// The runs screen's three headline numbers, from every run recorded in the repository:
+/// how many passed, how often a check caught the agent, and total spend. `None` when the
+/// repository has no recorded runs.
+#[allow(unused_variables)]
+pub fn headline_stats(repo: &std::path::Path) -> Option<[(String, String); 3]> {
+    todo!()
+}
+
 /// The distinct values one attribute takes in a metric.
 pub fn values_of(metrics: &[Metric], name: &str, key: &str) -> Vec<String> {
     let mut out: Vec<String> = metrics
