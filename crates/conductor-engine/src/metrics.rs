@@ -267,6 +267,12 @@ pub fn collect(t: &Trace, events: &[Event]) -> Vec<Metric> {
     m.done()
 }
 
+/// The runs screen's three headline numbers — runs passed, catch rate, spend — built from
+/// every run recorded in `repo`, or `None` when it has no recorded runs.
+pub fn headline_stats(repo: &std::path::Path) -> Option<[(String, String); 3]> {
+    todo!()
+}
+
 /// Adds another run's metrics into `into`.
 pub fn merge(into: &mut Vec<Metric>, more: Vec<Metric>) {
     for metric in more {

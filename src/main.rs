@@ -659,3 +659,49 @@ fn validate(args: &[String]) -> Result<ExitCode> {
         Ok(ExitCode::FAILURE)
     }
 }
+
+#[cfg(test)]
+mod headline_stats_tests {
+    use super::*;
+    use conductor_tui::app::RunSource;
+
+    const FIXTURE: &str = include_str!("../docs/examples/live-run-durations/events.jsonl");
+
+    fn write_run(repo: &Path, run_id: &str, events_jsonl: &str) {
+        let dir = repo.join(".conductor").join("runs").join(run_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("events.jsonl"), events_jsonl).unwrap();
+        std::fs::write(dir.join("receipt.json"), "{}").unwrap();
+    }
+
+    #[test]
+    fn repo_runs_stats_come_from_run_metrics_not_receipts() {
+        let repo = tempfile::tempdir().unwrap();
+        write_run(repo.path(), "R1", FIXTURE);
+        let src = RepoRuns(repo.path().to_path_buf());
+        let stats = src
+            .stats()
+            .expect("a repository with a recorded run has stats");
+        assert_eq!(
+            stats[0],
+            (
+                "1 of 1 passed".to_string(),
+                "runs recorded in this repository".to_string()
+            )
+        );
+        assert_eq!(
+            stats[1],
+            (
+                "33% caught".to_string(),
+                "the agent said done, a check said no".to_string()
+            )
+        );
+        assert_eq!(
+            stats[2],
+            (
+                "$0.44".to_string(),
+                "672k tokens across all runs".to_string()
+            )
+        );
+    }
+}

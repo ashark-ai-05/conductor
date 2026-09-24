@@ -54,6 +54,11 @@ pub trait RunSource {
     fn running(&self) -> Vec<LiveRun>;
     /// One run's live view.
     fn live(&self, run_id: &str) -> Option<LiveRun>;
+    /// The runs screen's three headline numbers, computed by the source itself (from run
+    /// metrics, for a real repository), or `None` to keep the receipt-derived numbers.
+    fn stats(&self) -> Option<[(String, String); 3]> {
+        None
+    }
 }
 
 pub struct App {
