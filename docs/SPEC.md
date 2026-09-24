@@ -304,7 +304,17 @@ One event stream feeds two sinks:
   unless `CONDUCTOR_OTLP_CONTENT=1` is set. Checks, verdicts and conductor's own events are
   exported whole.
 - A failed export is a warning. It never changes a run's verdict.
-- Metrics are not exported yet.
+- Metrics are exported with each run to `/v1/metrics`, as deltas over the run.
+  - Counters: runs, attempts, catches, checks, mutants, tokens, cost and events.
+  - Histograms: run and stage durations.
+  - Attributes are workflow, stage, agent, check, rung, outcome, verdict and source, never
+    the run id, so series stay few and add up across runs. The metrics resource names only
+    the service.
+  - Backends that want cumulative series, such as Prometheus via the OpenTelemetry
+    Collector, need its `deltatocumulative` processor.
+- `conductor stats` adds a repository's runs up locally: pass rate, catch rate by check,
+  retries by rung, checks passed, injected bugs caught, spend, median stage time, and
+  evidence by source.
 
 ### 9.10 Reuse
 - `promote` turns a successful `adhoc` or `plan` run into a reusable workflow file.

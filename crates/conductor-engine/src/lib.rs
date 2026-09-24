@@ -9,6 +9,7 @@ pub mod executor;
 pub mod herdr_exec;
 pub mod live;
 pub mod local_panes;
+pub mod metrics;
 pub mod otlp;
 pub mod receipt;
 pub mod store;

@@ -22,6 +22,8 @@ usage:
                                      each run gets a tab and each stage a pane
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
+  conductor stats                    what this repository's runs add up to: pass rate,
+                                     how often checks caught an agent, retries, spend
   conductor trace [<run-id>] [--export]
                                      show a run's stages, attempts and checks as a
                                      trace; --export sends it over OTLP
@@ -70,6 +72,7 @@ fn real_main() -> Result<ExitCode> {
         Some("receipt") => receipt(&args[1..]),
         Some("verify") => verify_cmd(&args[1..]),
         Some("trace") => trace_cmd(&args[1..]),
+        Some("stats") => stats_cmd(&args[1..]),
         Some("ui") => ui(&args[1..]),
         Some("validate") => validate(&args[1..]),
         Some("pane") => pane(&args[1..]),
@@ -251,6 +254,32 @@ fn receipt(args: &[String]) -> Result<ExitCode> {
     };
     let r = read_receipt(&repo, &id).map_err(anyhow::Error::msg)?;
     print_receipt(&r);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn stats_cmd(args: &[String]) -> Result<ExitCode> {
+    if let Some(a) = args.first() {
+        bail!("unknown option `{a}` for `conductor stats`");
+    }
+    let repo = repo_root()?;
+    let ids = list_runs(&repo);
+    if ids.is_empty() {
+        bail!("no runs recorded in this repository yet");
+    }
+    let mut all = Vec::new();
+    for id in &ids {
+        let dir = conductor_engine::store::RunDir::for_run(&repo, id);
+        if let Ok(events) = dir.read_events() {
+            let t = conductor_engine::trace::build(id, &events);
+            conductor_engine::metrics::merge(
+                &mut all,
+                conductor_engine::metrics::collect(&t, &events),
+            );
+        }
+    }
+    let plural = if ids.len() == 1 { "" } else { "s" };
+    println!("conductor stats · {} run{plural}\n", ids.len());
+    print!("{}", conductor_engine::metrics::summary(&all));
     Ok(ExitCode::SUCCESS)
 }
 

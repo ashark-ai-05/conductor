@@ -261,6 +261,11 @@ pub fn build(run_id: &str, events: &[Event]) -> Trace {
                         && e.source == Source::Measured
                     {
                         b.spans[g].attrs.push(("conductor.tokens".into(), t.into()));
+                        if let Some((_, cost)) = what.split_once(" · $") {
+                            b.spans[g]
+                                .attrs
+                                .push(("conductor.cost_usd".into(), cost.trim().into()));
+                        }
                     }
                     if what.starts_with("agent did not finish") {
                         b.spans[g].ok = Some(false);
@@ -379,6 +384,12 @@ mod tests {
                 .attrs
                 .iter()
                 .any(|(k, v)| k == "conductor.tokens" && v == "243496")
+        );
+        assert!(
+            agent
+                .attrs
+                .iter()
+                .any(|(k, v)| k == "conductor.cost_usd" && v == "0.14")
         );
         assert!(!agent.events.is_empty());
 
