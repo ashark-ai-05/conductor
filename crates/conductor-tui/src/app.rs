@@ -1,7 +1,7 @@
 //! Screen state and what each key does. No drawing, no terminal: that is what makes the
 //! behaviour testable without one.
 
-use conductor_model::view::LiveRun;
+use conductor_model::view::{LiveRun, Review};
 use conductor_model::{Receipt, RunSummary, demo};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -74,6 +74,10 @@ pub trait RunSource {
     fn answer(&self, _run_id: &str, _ask: u32, _allowed: bool) -> Result<(), String> {
         Err("answering is not available here".into())
     }
+    /// What a run waiting on a decision has to show for itself (`review.json`).
+    fn review(&self, _run_id: &str) -> Option<Review> {
+        None
+    }
 }
 
 pub struct App {
@@ -98,6 +102,9 @@ pub struct App {
     /// Runs whose receipt has no check at all (halted before any check ran), newest first.
     /// They are not rows in the list: nothing about them is worth reviewing.
     pub unchecked: Vec<String>,
+    /// The review of the live run while it waits on a decision: the live screen shows it
+    /// instead of the working view.
+    pub review: Option<Review>,
     /// Three headline numbers for the runs screen: value and label.
     pub stats: [(String, String); 3],
     /// Sample data that plays itself, or real runs read from disk.
@@ -122,6 +129,7 @@ impl App {
             receipts: vec![],
             deciding: None,
             unchecked: vec![],
+            review: None,
             needs_you: demo::needs_you().map(|(w, a, t)| (w.into(), a.into(), t)),
             stats: [
                 ("3 running".into(), "in herdr tabs 2–4".into()),
@@ -264,6 +272,16 @@ impl App {
         let (receipts, running) = (src.receipts(), src.running());
         let live = src.live(&self.live.run_id);
         let stats = src.stats();
+        // While the run waits on a decision, what the decision needs comes along.
+        let waiting_on_decision = live
+            .as_ref()
+            .and_then(|l| l.waiting.as_ref())
+            .is_some_and(|w| w.ask.is_none());
+        let review = if waiting_on_decision {
+            src.review(&self.live.run_id)
+        } else {
+            None
+        };
         self.set_runs(receipts, running);
         if let Some(stats) = stats {
             self.stats = stats;
@@ -271,6 +289,7 @@ impl App {
         if let Some(l) = live {
             self.live = l;
         }
+        self.review = review;
     }
 
     pub fn live_done(&self) -> bool {

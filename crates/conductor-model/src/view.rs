@@ -76,6 +76,55 @@ pub struct Waiting {
     pub ask: Option<u32>,
 }
 
+/// What a person needs to decide a run, on one screen: the intent, the change, the evidence,
+/// the cost, and then the decision. The engine writes it as `review.json` when a run pauses
+/// for a person; the TUI and the page show it. Everything in it is derived from the record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Review {
+    pub run_id: String,
+    /// The stage waiting on the person, and who.
+    pub stage: String,
+    pub who: String,
+    /// The work's title, from the ticket.
+    pub title: String,
+    /// The acceptance criteria, as the ticket lists them.
+    pub criteria: Vec<String>,
+    pub change: Change,
+    pub evidence: Vec<EvidenceRow>,
+    pub cost: Cost,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Change {
+    pub files: Vec<String>,
+    pub added: usize,
+    pub removed: usize,
+    pub branch: String,
+}
+
+/// One check, before the fix and after it, with the lines of its output that say so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceRow {
+    pub stage: String,
+    pub check: String,
+    pub claim: String,
+    pub before: Option<Verdict>,
+    pub after: Verdict,
+    pub detail: String,
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Cost {
+    pub tries: usize,
+    pub tokens: u64,
+    pub cost_usd: f64,
+    /// Seconds spent waiting on people, with the clock stopped.
+    pub waited_s: u64,
+    /// Seconds from the run's start to the pause.
+    pub wall_s: u64,
+}
+
 impl LiveRun {
     /// Every stage has passed.
     pub fn is_done(&self) -> bool {

@@ -47,6 +47,23 @@ evidence lands in the ticket as it happens; the run pauses; the PO approves or r
 Worked means: on three mock tickets, "I could approve from the ticket alone" and "a PO
 at work would accept this" are both yes. Stop means: approving without reading.
 
+## Second scope card (decide from one screen), 2026-09-26
+
+Problem: Krunal, reviewing a run as the PO in herdr, had the intent in the ticket, the
+change on a branch, the evidence in a file opened with git, the decision on another page
+and the cost on a third; he did not know where to look ("i dont know where to look. where
+is the ui?", 2026-09-25 19:23, run 0MUGNS5BX8U) and the review stalled.
+Does: when a run pauses for a person, the TUI's live screen shows the ticket's title and
+acceptance criteria, what changed, each check before the fix and after with its result
+lines, what it cost (tries, tokens, dollars, time waited on people), and the decision box.
+The engine writes it as `review.json`; the page can show the same file.
+Does not: plan or break work down (no evidence yet); show the diff text or the log on that
+screen (a key away); change the page (second surface, later).
+Worked means: on the next three runs Krunal decides from that screen without opening git
+or the browser, and none of the three comes back wrong.
+Stop means: he opens git anyway.
+Open: a PO at work has not seen it (Gate 3.3).
+
 ## Next, in order
 
 1. The three-ticket test ran on 2026-09-25 (`three-ticket-test.md`): 6 of 6 by Krunal's

@@ -83,6 +83,14 @@ const TICKETS: [Ticket; 3] = [
     },
 ];
 
+fn title_of(id: &str) -> &'static str {
+    match id {
+        "BUG-101" => "BUG-101: Balance request fails for an account with no postings",
+        "BUG-102" => "BUG-102: Balance request fails when the account id is typed in lower case",
+        _ => "BUG-103: Balance is a cent short of the ledger for a half-cent posting",
+    }
+}
+
 /// The three tickets run one after another: the deploy binds one port.
 #[test]
 fn each_bug_fix_is_deployed_checked_evidenced_and_approved() {
@@ -167,6 +175,26 @@ fn one_ticket(t: &Ticket) {
     let (run_id, w) = waiting;
     assert_eq!((w.stage.as_str(), w.who.as_str()), ("review", "PO"));
     assert!(w.question.contains("Approve only if"), "{}", w.question);
+    // The one screen to decide from: the ticket's criteria, the change, each check before
+    // and after with its result lines, and the cost.
+    let review = conductor_engine::review::read(repo, &run_id).expect("review.json");
+    assert_eq!(review.title.as_str(), title_of(t.id));
+    assert_eq!(review.criteria.len(), 4, "{:?}", review.criteria);
+    assert!(review.criteria[0].starts_with("AC1:"));
+    assert_eq!(review.change.files, vec![JAVA]);
+    let deploy = review
+        .evidence
+        .iter()
+        .find(|e| e.claim.contains("deploy-and-test"))
+        .expect("the deploy check");
+    assert_eq!(deploy.before, Some(conductor_model::Verdict::Failed));
+    assert_eq!(deploy.after, conductor_model::Verdict::Passed);
+    assert!(
+        deploy.lines.iter().all(|l| l.starts_with("PASS AC")) && deploy.lines.len() == 3,
+        "{:?}",
+        deploy.lines
+    );
+    assert_eq!(review.cost.tries, 1);
 
     let approve = Command::new(env!("CARGO_BIN_EXE_conductor"))
         .args([

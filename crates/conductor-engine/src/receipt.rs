@@ -29,6 +29,13 @@ pub struct StageRecord {
     pub notes: Vec<String>,
     /// Gate kinds declared for the stage, including ones never reached.
     pub declared: Vec<String>,
+    /// The command checks run at the stage's base before any agent, when the stage carries
+    /// evidence: what the fix was for.
+    #[serde(default)]
+    pub before: Vec<GateResult>,
+    /// Milliseconds spent waiting on people, with the clock stopped.
+    #[serde(default)]
+    pub waited_ms: u64,
 }
 
 impl StageRecord {
@@ -46,6 +53,8 @@ impl StageRecord {
             model: None,
             notes: vec![],
             declared: s.all_gates().map(|g| g.name().to_owned()).collect(),
+            before: vec![],
+            waited_ms: 0,
         }
     }
 

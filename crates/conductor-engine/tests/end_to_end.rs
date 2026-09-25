@@ -560,7 +560,7 @@ fn a_human_stage_waits_for_a_decision_and_records_it_as_evidence() {
     .unwrap();
     fs::write(
         p.join("tickets/T-1.md"),
-        "# T-1: say hello\n\nAC1: notes/out.md contains hello\n",
+        "# T-1: say hello\n\n## Acceptance criteria\n\n- AC1: notes/out.md contains hello\n",
     )
     .unwrap();
     fs::write(
@@ -670,6 +670,29 @@ stages:
         "{events:#?}"
     );
     assert!(events.iter().any(|e| e.what == "QA approved: AC1 shown"));
+    // What the person had to decide from, on one screen: written when the run paused.
+    let review = conductor_engine::review::read(p, &out.run_id).expect("review.json");
+    assert_eq!(
+        (review.stage.as_str(), review.who.as_str()),
+        ("review", "QA")
+    );
+    assert_eq!(review.title, "T-1: say hello");
+    assert_eq!(review.change.files, vec!["notes/out.md"]);
+    assert_eq!((review.change.added, review.change.removed), (1, 0));
+    let grep = review
+        .evidence
+        .iter()
+        .find(|e| e.check == "command_assert")
+        .expect("the grep check");
+    assert_eq!(grep.before, Some(Verdict::Failed));
+    assert_eq!(grep.after, Verdict::Passed);
+    assert_eq!(review.cost.tries, 1);
+    assert!(
+        events.iter().any(|e| e
+            .what
+            .starts_with("review written: 1 criteria, 1 file(s) changed")),
+        "{events:#?}"
+    );
     let ticket = git_show(p, "tickets/T-1.md");
     assert!(ticket.contains("**Before the fix**"), "{ticket}");
     assert!(ticket.contains("**After the fix**"), "{ticket}");
