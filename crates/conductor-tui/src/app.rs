@@ -14,7 +14,8 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 4] = [Screen::Runs, Screen::Live, Screen::Receipt, Screen::Launch];
+    /// Tab order: start something, see what is running, watch one, read what it proved.
+    pub const ALL: [Screen; 4] = [Screen::Launch, Screen::Runs, Screen::Live, Screen::Receipt];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -26,21 +27,28 @@ impl Screen {
     }
 }
 
-/// The three launch questions and their current answers.
+/// The launch questions and their current answers: which workflow, and what to work on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
-    /// Which question has focus: 0 kind, 1 spec, 2 where.
+    /// Which question has focus: 0 workflow, 1 the input.
     pub focus: usize,
+    /// The repository's workflows, as paths, and which one is chosen.
+    pub workflows: Vec<String>,
+    pub workflow: usize,
+    /// A ticket path, or the task in the person's words.
     pub spec: String,
-    pub headless: bool,
+    /// Where the run will go: a herdr tab when herdr is there, else headless.
+    pub herdr: bool,
 }
 
 impl Default for Launch {
     fn default() -> Self {
         Launch {
             focus: 0,
+            workflows: vec![".conductor/workflows/build.yaml".into()],
+            workflow: 0,
             spec: "tickets/PTT-1240.md".into(),
-            headless: false,
+            herdr: true,
         }
     }
 }
@@ -77,6 +85,19 @@ pub trait RunSource {
     /// What a run waiting on a decision has to show for itself (`review.json`).
     fn review(&self, _run_id: &str) -> Option<Review> {
         None
+    }
+    /// The repository's workflows, as paths relative to it.
+    fn workflows(&self) -> Vec<String> {
+        vec![]
+    }
+    /// Whether a run started from here goes into a herdr tab.
+    fn in_herdr(&self) -> bool {
+        false
+    }
+    /// Starts a run of `workflow` on `input` (a ticket path if it names a file, else the
+    /// task text) and returns its id once it exists.
+    fn start(&self, _workflow: &str, _input: &str) -> Result<String, String> {
+        Err("starting runs is not available here".into())
     }
 }
 
@@ -150,6 +171,9 @@ impl App {
         if let Some(stats) = source.stats() {
             app.stats = stats;
         }
+        app.launch.workflows = source.workflows();
+        app.launch.herdr = source.in_herdr();
+        app.launch.spec.clear();
         app.source = Some(source);
         app
     }
@@ -330,9 +354,9 @@ impl App {
             ],
             Screen::Launch => &[
                 ("↑↓", "question", false),
-                ("←→", "choose", false),
+                ("←→", "workflow", false),
                 ("⏎", "start run", false),
-                ("esc", "cancel", false),
+                ("esc", "runs", false),
             ],
         };
         if self.demo {
@@ -536,25 +560,73 @@ impl App {
     }
 
     fn launch_key(&mut self, code: KeyCode) {
+        let n = self.launch.workflows.len();
         match code {
-            KeyCode::Down | KeyCode::Tab => self.launch.focus = (self.launch.focus + 1).min(2),
+            KeyCode::Down | KeyCode::Tab => self.launch.focus = (self.launch.focus + 1).min(1),
             KeyCode::Up | KeyCode::BackTab => {
                 self.launch.focus = self.launch.focus.saturating_sub(1)
             }
-            KeyCode::Left | KeyCode::Right if self.launch.focus == 2 => {
-                self.launch.headless = !self.launch.headless
+            KeyCode::Left if self.launch.focus == 0 && n > 0 => {
+                self.launch.workflow = (self.launch.workflow + n - 1) % n
+            }
+            KeyCode::Right if self.launch.focus == 0 && n > 0 => {
+                self.launch.workflow = (self.launch.workflow + 1) % n
             }
             KeyCode::Enter if self.demo => {
                 self.restart_live();
                 self.go(Screen::Live);
             }
-            KeyCode::Enter => {
-                self.status = Some(
-                    "start runs with `conductor run <workflow> --spec <file>` for now; they show up here"
-                        .into(),
-                )
-            }
+            KeyCode::Enter => self.start_run(),
             _ => {}
+        }
+    }
+
+    /// Starts the chosen workflow on what was typed, and follows it on the live screen.
+    fn start_run(&mut self) {
+        let input = self.launch.spec.trim().to_owned();
+        if input.is_empty() {
+            self.status =
+                Some("say what to work on: a ticket path, or the task in your words".into());
+            self.launch.focus = 1;
+            return;
+        }
+        let Some(workflow) = self.launch.workflows.get(self.launch.workflow).cloned() else {
+            self.status =
+                Some("no workflow under .conductor/workflows/; `conductor init` writes one".into());
+            return;
+        };
+        let started = match &self.source {
+            Some(src) => src.start(&workflow, &input),
+            None => Err("starting runs is not available here".into()),
+        };
+        match started {
+            Ok(id) => {
+                let status = format!(
+                    "started {id}{}",
+                    if self.launch.herdr {
+                        " in a herdr tab"
+                    } else {
+                        ""
+                    }
+                );
+                self.live = LiveRun {
+                    run_id: id,
+                    work: input,
+                    kind: String::new(),
+                    herdr_tab: None,
+                    stages: vec![],
+                    checks: vec![],
+                    note: Some("starting…".into()),
+                    log: vec![],
+                    panes: vec![],
+                    ended: None,
+                    pid: None,
+                    waiting: None,
+                };
+                self.go(Screen::Live);
+                self.status = Some(status);
+            }
+            Err(e) => self.status = Some(format!("not started: {e}")),
         }
     }
 }
@@ -575,9 +647,9 @@ mod tests {
     #[test]
     fn number_keys_switch_screens() {
         let mut app = App::demo();
-        press(&mut app, KeyCode::Char('3'));
-        assert_eq!(app.screen, Screen::Receipt);
         press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.screen, Screen::Receipt);
+        press(&mut app, KeyCode::Char('1'));
         assert_eq!(app.screen, Screen::Launch);
     }
 
@@ -639,6 +711,90 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.screen, Screen::Live);
         assert!(!app.live_done());
+    }
+
+    /// A source that starts runs and remembers what it was asked to start.
+    struct Starter(std::cell::RefCell<Vec<(String, String)>>);
+    impl RunSource for Starter {
+        fn receipts(&self) -> Vec<Receipt> {
+            vec![]
+        }
+        fn running(&self) -> Vec<LiveRun> {
+            vec![]
+        }
+        fn live(&self, _id: &str) -> Option<LiveRun> {
+            None
+        }
+        fn workflows(&self) -> Vec<String> {
+            vec![
+                ".conductor/workflows/bugfix.yaml".into(),
+                ".conductor/workflows/ask.yaml".into(),
+            ]
+        }
+        fn in_herdr(&self) -> bool {
+            true
+        }
+        fn start(&self, workflow: &str, input: &str) -> Result<String, String> {
+            self.0.borrow_mut().push((workflow.into(), input.into()));
+            Ok("NEW1".into())
+        }
+    }
+
+    #[test]
+    fn the_launch_tab_starts_the_chosen_workflow_on_what_was_typed_and_follows_it() {
+        let asked = std::rc::Rc::new(Starter(std::cell::RefCell::new(vec![])));
+        struct Shared(std::rc::Rc<Starter>);
+        impl RunSource for Shared {
+            fn receipts(&self) -> Vec<Receipt> {
+                self.0.receipts()
+            }
+            fn running(&self) -> Vec<LiveRun> {
+                self.0.running()
+            }
+            fn live(&self, id: &str) -> Option<LiveRun> {
+                self.0.live(id)
+            }
+            fn workflows(&self) -> Vec<String> {
+                self.0.workflows()
+            }
+            fn in_herdr(&self) -> bool {
+                self.0.in_herdr()
+            }
+            fn start(&self, w: &str, i: &str) -> Result<String, String> {
+                self.0.start(w, i)
+            }
+        }
+        let mut app = App::from_source(Box::new(Shared(asked.clone())));
+        app.go(Screen::Launch);
+        assert_eq!(app.launch.workflows.len(), 2);
+        assert!(app.launch.herdr);
+        // Nothing typed: nothing starts.
+        press(&mut app, KeyCode::Enter);
+        assert!(asked.0.borrow().is_empty());
+        assert_eq!(app.launch.focus, 1);
+        // Pick the second workflow, type the ticket, start.
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Down);
+        for c in "tickets/BUG-102.md".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            asked.0.borrow().as_slice(),
+            [(
+                ".conductor/workflows/ask.yaml".to_string(),
+                "tickets/BUG-102.md".to_string()
+            )]
+        );
+        assert_eq!(app.screen, Screen::Live);
+        assert_eq!(app.live.run_id, "NEW1");
+        assert!(
+            app.status
+                .as_deref()
+                .unwrap()
+                .starts_with("started NEW1 in a herdr tab")
+        );
     }
 
     #[test]

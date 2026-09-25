@@ -934,23 +934,6 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
 fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let l = &app.launch;
-    let radio = |on: bool, label: &str, later: Option<&str>| -> Vec<Span<'static>> {
-        let mut v = vec![
-            Span::styled(
-                if on { "(•) " } else { "( ) " },
-                if on { t.fg(t.accent) } else { t.faint() },
-            ),
-            Span::styled(
-                label.to_owned(),
-                if later.is_some() { t.faint() } else { t.text() },
-            ),
-        ];
-        if let Some(r) = later {
-            v.push(Span::styled(format!(" {r}"), t.faint()));
-        }
-        v.push(Span::raw("     "));
-        v
-    };
     let q = |n: usize, text: &str| -> Line<'static> {
         let focused = l.focus + 1 == n;
         Line::from(vec![
@@ -965,40 +948,56 @@ fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
     let mut lines = vec![
         Line::from(Span::styled(
-            "Three questions, then conductor opens a new herdr tab for the run.",
+            "Two questions, then conductor starts the run and follows it here.",
             t.dim(),
         )),
         Line::raw(""),
+        q(1, "Which workflow?"),
     ];
-    lines.push(q(1, "What kind of work?"));
-    let mut kinds = vec![Span::raw("     ")];
-    kinds.extend(radio(true, "build a change", None));
-    kinds.extend(radio(false, "ask a question", Some("v0.2")));
-    kinds.extend(radio(false, "QA", Some("v0.2")));
-    kinds.extend(radio(false, "troubleshoot", Some("v0.3")));
-    lines.push(Line::from(kinds));
-    lines.push(Line::from(Span::styled(
-        "     spec → tests by one agent → code by another",
-        t.dim(),
-    )));
+    if l.workflows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "     none under .conductor/workflows/ · `conductor init` writes one",
+            t.faint(),
+        )));
+    } else {
+        let mut choices = vec![Span::raw("     ")];
+        for (i, w) in l.workflows.iter().enumerate() {
+            let on = i == l.workflow;
+            let name = w
+                .rsplit('/')
+                .next()
+                .unwrap_or(w)
+                .trim_end_matches(".yaml")
+                .to_owned();
+            choices.push(Span::styled(
+                if on { "(•) " } else { "( ) " },
+                if on { t.fg(t.accent) } else { t.faint() },
+            ));
+            choices.push(Span::styled(name, if on { t.text() } else { t.dim() }));
+            choices.push(Span::raw("     "));
+        }
+        lines.push(Line::from(choices));
+        if let Some(w) = l.workflows.get(l.workflow) {
+            lines.push(Line::from(Span::styled(format!("     {w}"), t.faint())));
+        }
+    }
     lines.push(Line::raw(""));
-    lines.push(q(2, "What should it build?"));
+    lines.push(q(2, "What should it work on?"));
     let cursor = if l.focus == 1 { "▏" } else { "" };
     lines.push(Line::from(vec![
         Span::raw("     "),
         Span::styled(format!(" {}{cursor} ", l.spec), t.text().bg(t.sel)),
     ]));
-    lines.push(Line::raw(""));
-    lines.push(q(3, "Where should it run?"));
-    let mut place = vec![Span::raw("     ")];
-    place.extend(radio(!l.headless, "herdr, in a new tab", None));
-    place.extend(radio(l.headless, "in the background", None));
-    lines.push(Line::from(place));
     lines.push(Line::from(Span::styled(
-        if l.headless {
-            "     no panes; for CI and overnight"
+        "     a ticket path, or the task in your words",
+        t.dim(),
+    )));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        if l.herdr {
+            "     runs in a herdr tab: you can watch and step in"
         } else {
-            "     you can watch and step in · opens herdr tab 5; 3 runs already active"
+            "     runs headless: no panes; the live screen follows it"
         },
         t.dim(),
     )));
@@ -1010,22 +1009,7 @@ fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             t.fg(t.sel).bg(t.accent).add_modifier(Modifier::BOLD),
         ),
     ]));
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled("     Defaults from this repo's policy: tests must catch 70% of injected bugs · 2 test runs · 60 min budget", t.faint())));
-
-    let height = (lines.len() as u16 + 3).min(area.height);
-    let [form, _] = Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(area);
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(block(
-                t,
-                "new run",
-                "the workflow and policy are read from the base commit",
-                true,
-            )),
-        form,
-    );
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]
@@ -1261,15 +1245,17 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_screen_asks_three_questions() {
+    fn the_launch_screen_asks_two_questions() {
         let mut app = App::demo();
         app.go(Screen::Launch);
         let s = render(&app, 140, 40);
         for want in [
-            "What kind of work?",
-            "What should it build?",
-            "Where should it run?",
+            "Which workflow?",
+            "(•) build",
+            "What should it work on?",
             "tickets/PTT-1240.md",
+            "a ticket path, or the task in your words",
+            "runs in a herdr tab",
             "Start run",
         ] {
             assert!(s.contains(want), "missing {want:?}\n{s}");

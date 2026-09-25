@@ -64,6 +64,20 @@ or the browser, and none of the three comes back wrong.
 Stop means: he opens git anyway.
 Open: a PO at work has not seen it (Gate 3.3).
 
+## Third scope card (start from the TUI), 2026-09-26
+
+Problem: Krunal, in herdr, wanting to start a run on a ticket, had to leave the TUI,
+remember the command and its flags, and type it in a shell; on 2026-09-25 that cost two
+round trips to the agent for the command.
+Does: the TUI's launch tab, first in the tab order, asks which workflow (always listed)
+and what to work on (a ticket path, or the task in your words), and Enter starts
+`conductor run` in the background, in a herdr tab when herdr is there, and follows it on
+the live screen.
+Does not: plan or break work down; choose the model; run ad hoc kinds (only `build`
+runs today).
+Worked means: the next three runs start from the TUI without a shell command.
+Stop means: a shell command is still faster and Krunal goes back to it.
+
 ## Next, in order
 
 1. The three-ticket test ran on 2026-09-25 (`three-ticket-test.md`): 6 of 6 by Krunal's
