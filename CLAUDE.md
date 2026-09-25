@@ -49,12 +49,15 @@ at work would accept this" are both yes. Stop means: approving without reading.
 
 ## Next, in order
 
-1. Run the three-ticket test with the real Claude and fill in `three-ticket-test.md`.
-   No feature before its answers are in.
-2. From the answers: whether the review panel needs to show the ticket's evidence (today
-   it says "in the ticket" but does not show it), or nothing.
-3. Then, only after the test: investigate stage, rejection looping back to fix, Amp or
-   Copilot as an agent, Jira/Bamboo/Bitbucket over MCP.
+1. The three-ticket test ran on 2026-09-25 (`three-ticket-test.md`): 6 of 6 by Krunal's
+   reading, and its last column was built the same day. Not yet seen by a PO. Next: show a
+   PO at work one ticket and write their words, verbatim, into the sheet. No feature
+   before that.
+2. Re-run the three tickets with the real Claude on the new evidence shape, and watch
+   what happens when the agent edits the ticket and is stopped (BUG-103 did, once).
+3. Then, from the PO's words: investigate stage, rejection looping back to fix, Amp or
+   Copilot as an agent, Jira/Bamboo/Bitbucket over MCP, the review panel showing the
+   ticket's evidence, or nothing.
 
 ## Later list (not now)
 
