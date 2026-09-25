@@ -34,6 +34,8 @@ reviews) → PR (Bitbucket; agents and people review) → merge → deploy to pr
   workflow. `tests/sdlc_mock.rs` runs all three end to end. `three-ticket-test.md` is the
   sheet for the scope card's measure.
 - Claude agents' tool calls and refusals are recorded as they happen.
+- Evidence shows the checks before the fix, the change, and only conductor's words (an
+  agent editing the ticket fails the attempt). A decision needs a note.
 - A tool the agent asks for is answered by a person: `conductor ask` is Claude's
   `--permission-prompt-tool` (an MCP server over the run's `asks/` files); the run page,
   the TUI and `conductor allow`/`deny` answer it; the stage clock stops while it waits.

@@ -659,8 +659,116 @@ stages:
     assert!(
         events.iter().any(|e| e
             .what
-            .starts_with("evidence: 3 item(s) appended to tickets/T-1.md")),
+            .starts_with("evidence: 5 item(s) appended to tickets/T-1.md")),
+        "{events:#?}"
+    );
+    // The check ran at the base first, and failed there: the ticket shows the before.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.what.starts_with("before the fix: command_assert failed")),
         "{events:#?}"
     );
     assert!(events.iter().any(|e| e.what == "QA approved: AC1 shown"));
+    let ticket = git_show(p, "tickets/T-1.md");
+    assert!(ticket.contains("**Before the fix**"), "{ticket}");
+    assert!(ticket.contains("**After the fix**"), "{ticket}");
+    assert!(
+        ticket.contains("- **change**: 1 file(s), +1 −0"),
+        "{ticket}"
+    );
+    assert!(ticket.contains("+hello"), "{ticket}");
+}
+
+/// The ticket on the latest `conductor/*` branch.
+fn git_show(repo: &Path, path: &str) -> String {
+    let branches = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "branch",
+            "--list",
+            "conductor/*",
+            "--format=%(refname:short)",
+        ])
+        .output()
+        .unwrap();
+    let branch = String::from_utf8_lossy(&branches.stdout)
+        .lines()
+        .last()
+        .unwrap()
+        .to_owned();
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["show", &format!("{branch}:{path}")])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Only conductor writes the ticket: an agent that adds its own words to it fails the
+/// attempt, and its words are dropped before the evidence goes in.
+#[test]
+fn an_agent_that_writes_into_the_ticket_is_stopped_and_its_words_dropped() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    fs::create_dir_all(p.join(".conductor/workflows")).unwrap();
+    fs::create_dir_all(p.join("tickets")).unwrap();
+    fs::write(
+        p.join(".gitignore"),
+        "/.conductor/runs/\n/.test-conductor-home/\n",
+    )
+    .unwrap();
+    fs::write(p.join("tickets/T-2.md"), "# T-2: say hello\n").unwrap();
+    fs::write(
+        p.join(".conductor/workflows/build.yaml"),
+        r#"id: tampering
+version: 1
+kind: build
+defaults:
+  retries: { max: 0, ladder: [] }
+stages:
+  - id: write
+    agent: { kind: script, command: ["sh", "-c", "mkdir -p notes && echo hello > notes/out.md && echo 'Root cause: I say so' >> tickets/T-2.md"] }
+    scope: { write: ["notes/**"] }
+    evidence: { to: "{{spec}}" }
+    gates:
+      - { type: scope }
+      - { type: command_assert, command: ["grep", "-q", "hello", "notes/out.md"], parser: exit }
+"#,
+    )
+    .unwrap();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "t"]);
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "base"]);
+    let mut opts = options(p);
+    opts.spec_path = Some("tickets/T-2.md".into());
+    let out = conductor_engine::run(opts).unwrap();
+    assert_eq!(out.receipt.verdict(), Verdict::Failed);
+    let dir = conductor_engine::store::RunDir::for_run(p, &out.run_id);
+    let events = dir.read_events().unwrap();
+    assert!(
+        events.iter().any(|e| e.what.starts_with(
+            "scope failed: the agent changed tickets/T-2.md; only conductor writes evidence there"
+        )),
+        "{events:#?}"
+    );
+    // The evidence still went in, onto the ticket as it was at the base.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.what.starts_with("evidence: ") && e.what.contains("tickets/T-2.md")),
+        "{events:#?}"
+    );
+    let wt = out.worktree.clone();
+    let ticket = fs::read_to_string(wt.join("tickets/T-2.md")).unwrap();
+    assert!(!ticket.contains("I say so"), "{ticket}");
+    assert!(ticket.contains("## Evidence"), "{ticket}");
+    assert!(
+        ticket.contains("scope** failed: the agent changed"),
+        "{ticket}"
+    );
 }

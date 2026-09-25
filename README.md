@@ -88,7 +88,10 @@ decision is the stage's check on the receipt:
 
 `evidence` appends every check's command, verdict and output, plus the files named, to
 the ticket the run was given (`--spec tickets/BUG-101.md`), while the stage runs, so there
-is nothing to collect afterwards. The decision lands there too. Decide from the run's
+is nothing to collect afterwards: the checks failing before the fix, each check with its
+output after it, the change itself, and the files the stage names. Only conductor writes
+there; an agent that changes the ticket fails the attempt and its words are dropped. The
+decision lands there too, and it needs a note saying what was checked. Decide from the run's
 page in `conductor serve`, with `y` / `n` in `conductor ui`, or with
 `conductor approve <run> --by PO -m "…"` and `conductor reject`.
 

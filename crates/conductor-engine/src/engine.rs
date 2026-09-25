@@ -229,7 +229,9 @@ fn human_stage(
             &stage.id,
             1,
             run_id,
+            None,
             std::slice::from_ref(&result),
+            None,
             &[],
         ) {
             Ok(_) => {
@@ -258,15 +260,25 @@ const EVIDENCE_TAIL: usize = 40;
 
 /// Appends one attempt's checks and files to `to`, under an `## Evidence` heading the
 /// first time. Returns how many items were written.
+/// How many lines of a change the ticket carries; the rest is on the run's branch.
+const EVIDENCE_PATCH: usize = 200;
+
+/// Appends this attempt's evidence to the ticket: the checks before the fix (first attempt
+/// only), every check with its output, the files the stage names, and the change itself.
+/// Returns how many items went in and the exact text appended, so the engine can tell
+/// conductor's writes to the ticket from anyone else's.
+#[allow(clippy::too_many_arguments)]
 fn append_evidence(
     wt: &Path,
     to: &str,
     stage: &str,
     attempt: usize,
     run_id: &str,
+    before: Option<(&str, &[GateResult])>,
     results: &[GateResult],
+    patch: Option<&str>,
     files: &[String],
-) -> std::io::Result<usize> {
+) -> std::io::Result<(usize, String)> {
     use std::fmt::Write as _;
     let path = wt.join(to);
     let current = std::fs::read_to_string(&path).unwrap_or_default();
@@ -283,43 +295,50 @@ fn append_evidence(
         crate::store::now()
     );
     let mut n = 0;
-    for r in results {
+    if let Some((base, before)) = before
+        && !before.is_empty()
+    {
         let _ = writeln!(
             out,
-            "- {} **{}** {}: {}",
-            r.verdict.glyph(),
-            r.gate,
-            r.verdict.word(),
-            r.detail
+            "**Before the fix**, at commit {}:\n",
+            base.get(..12).unwrap_or(base)
         );
-        n += 1;
-        for e in &r.executions {
+        n += write_results(&mut out, before);
+        out.push_str("\n**After the fix**:\n\n");
+    }
+    n += write_results(&mut out, results);
+    if let Some(patch) = patch
+        && !patch.trim().is_empty()
+    {
+        let files = patch
+            .lines()
+            .filter(|l| l.starts_with("diff --git "))
+            .count();
+        let added = patch
+            .lines()
+            .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+            .count();
+        let removed = patch
+            .lines()
+            .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+            .count();
+        let total = patch.lines().count();
+        let _ = writeln!(
+            out,
+            "- **change**: {files} file(s), +{added} −{removed} (branch conductor/{run_id})"
+        );
+        out.push_str("  ```diff\n");
+        for l in patch.lines().take(EVIDENCE_PATCH) {
+            let _ = writeln!(out, "  {l}");
+        }
+        out.push_str("  ```\n");
+        if total > EVIDENCE_PATCH {
             let _ = writeln!(
                 out,
-                "  - `{}` exited {}",
-                e.argv.join(" "),
-                e.exit_code
-                    .map_or("without a code".to_string(), |c| c.to_string())
-            );
-            let text = format!("{}\n{}", e.stdout_text(), e.stderr_tail);
-            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-            if !lines.is_empty() {
-                let start = lines.len().saturating_sub(EVIDENCE_TAIL);
-                if start > 0 {
-                    let _ = writeln!(out, "    (last {EVIDENCE_TAIL} of {} lines)", lines.len());
-                }
-                out.push_str("    ```\n");
-                for l in &lines[start..] {
-                    let _ = writeln!(out, "    {l}");
-                }
-                out.push_str("    ```\n");
-            }
-            let _ = writeln!(
-                out,
-                "    stdout {} · stderr {}",
-                e.stdout_sha256, e.stderr_sha256
+                "  (first {EVIDENCE_PATCH} of {total} lines; the whole change is on the branch)"
             );
         }
+        n += 1;
     }
     for f in files {
         let p = wt.join(f);
@@ -356,7 +375,93 @@ fn append_evidence(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&path, current + &out)?;
-    Ok(n)
+    Ok((n, out))
+}
+
+/// One line per check, then each command's output and hashes.
+fn write_results(out: &mut String, results: &[GateResult]) -> usize {
+    use std::fmt::Write as _;
+    let mut n = 0;
+    for r in results {
+        let _ = writeln!(
+            out,
+            "- {} **{}** {}: {}",
+            r.verdict.glyph(),
+            r.gate,
+            r.verdict.word(),
+            r.detail
+        );
+        n += 1;
+        for e in &r.executions {
+            let ran = format!(
+                "`{}` exited {}",
+                e.argv.join(" "),
+                e.exit_code
+                    .map_or("without a code".to_string(), |c| c.to_string())
+            );
+            // An exit-code check's detail is this same line: say it once.
+            if !r.detail.contains(&ran) {
+                let _ = writeln!(out, "  - {ran}");
+            }
+            let text = format!("{}\n{}", e.stdout_text(), e.stderr_tail);
+            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            if !lines.is_empty() {
+                let start = lines.len().saturating_sub(EVIDENCE_TAIL);
+                if start > 0 {
+                    let _ = writeln!(out, "    (last {EVIDENCE_TAIL} of {} lines)", lines.len());
+                }
+                out.push_str("    ```\n");
+                for l in &lines[start..] {
+                    let _ = writeln!(out, "    {l}");
+                }
+                out.push_str("    ```\n");
+            }
+            let _ = writeln!(
+                out,
+                "    stdout {} · stderr {}",
+                e.stdout_sha256, e.stderr_sha256
+            );
+        }
+    }
+    n
+}
+
+/// The checks the ticket will show, run once at the stage's base before any agent, so the
+/// evidence carries the failure the fix is for and not only the pass after it.
+#[allow(clippy::too_many_arguments)]
+fn before_checks(
+    stage: &Stage,
+    wt: &Path,
+    base: &str,
+    dir: &RunDir,
+    run_id: &str,
+    timeout: Duration,
+    paths: &StagePaths,
+    protected: &[String],
+    generated: &[String],
+) -> Vec<GateResult> {
+    let mut out = Vec::new();
+    for (gi, g) in stage.all_gates().enumerate() {
+        if !matches!(g, Gate::CommandAssert { .. }) {
+            continue;
+        }
+        let scratch = dir.scratch(&stage.id, 0).join(format!("before-{gi}"));
+        let ctx = gate::Context {
+            worktree: wt,
+            base,
+            run_id,
+            timeout,
+            write: &paths.write,
+            frozen: &paths.frozen,
+            protected,
+            generated,
+            outputs: &paths.outputs,
+            baseline_tests: None,
+            scratch: &scratch,
+        };
+        out.push(gate::evaluate(&with_spec(g, paths.spec.as_deref()), &ctx));
+    }
+    out
 }
 
 fn uses_new_tests(stage: &Stage) -> bool {
@@ -861,6 +966,43 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
             } else {
                 None
             };
+            // A stage with evidence shows the checks failing before the fix as well as
+            // passing after it.
+            let before: Vec<GateResult> = if stage.evidence.is_some() {
+                before_checks(
+                    stage,
+                    &wt,
+                    &stage_base,
+                    &dir,
+                    &run_id,
+                    stage_timeout,
+                    &paths,
+                    &protected,
+                    &generated,
+                )
+            } else {
+                Vec::new()
+            };
+            for r in &before {
+                rec.record(
+                    Source::Witnessed,
+                    Some(&stage.id),
+                    format!(
+                        "before the fix: {} {}: {}",
+                        r.gate,
+                        r.verdict.word(),
+                        r.detail
+                    ),
+                )?;
+            }
+            live.save(&rec);
+            // The ticket as it is at the stage's base (the tree is at the base here, and the
+            // checks above don't write it), and what conductor has appended to it since:
+            // anything else in it is the agent's, and the agent's words are not evidence.
+            let ticket_base = evidence_to
+                .as_deref()
+                .map(|to| std::fs::read_to_string(wt.join(to)).unwrap_or_default());
+            let mut appended = String::new();
 
             let max_attempts = 1 + wf.defaults.retries.max as usize;
             let mut feedback_text: Option<String> = None;
@@ -881,6 +1023,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     Some(Rung::InContext) => session.clone(),
                     Some(Rung::Fresh) => {
                         worktree::reset(&wt, &stage_base)?;
+                        appended.clear();
                         None
                     }
                     Some(Rung::CrossKind) => {
@@ -1075,7 +1218,41 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
 
                 let mut results: Vec<GateResult> = Vec::new();
                 let mut first_bad: Option<usize> = None;
+                // Only conductor writes the ticket. If the agent changed it, its changes are
+                // dropped and the attempt fails, before any other check.
+                if let (Some(to), Some(base_text)) = (&evidence_to, &ticket_base) {
+                    let expected = format!("{base_text}{appended}");
+                    let actual = std::fs::read_to_string(wt.join(to)).unwrap_or_default();
+                    if actual != expected {
+                        std::fs::write(wt.join(to), &expected)?;
+                        let detail = format!(
+                            "the agent changed {to}; only conductor writes evidence there, so its changes were dropped"
+                        );
+                        rec.record(
+                            Source::Witnessed,
+                            Some(&stage.id),
+                            format!("scope failed: {detail}"),
+                        )?;
+                        live.check(0, Verdict::Failed, &detail);
+                        live.save(&rec);
+                        results.push(GateResult {
+                            gate: "scope",
+                            verdict: Verdict::Failed,
+                            detail,
+                            executions: vec![],
+                            assertions: vec![],
+                            scope: None,
+                            mutation: None,
+                            tests: None,
+                            claim: Some("only the files you may change were changed".into()),
+                        });
+                        first_bad = Some(0);
+                    }
+                }
                 for (gi, g) in stage.all_gates().enumerate() {
+                    if first_bad.is_some() {
+                        break;
+                    }
                     let scratch = dir.scratch(&stage.id, attempt).join(gi.to_string());
                     let timeout = match g {
                         Gate::Mutation { .. } => Duration::from_secs(
@@ -1130,21 +1307,35 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
 
                 // What this attempt changed, kept whatever the checks said, so a person can see
                 // try 1 next to try 2. A fresh retry resets the tree and would lose it.
-                if let Ok(patch) = worktree::diff_from(&wt, &stage_base) {
+                let patch = worktree::diff_from(&wt, &stage_base, evidence_to.as_deref()).ok();
+                if let Some(patch) = &patch {
                     let path = dir.attempt_diff(&stage.id, attempt);
                     let _ = std::fs::create_dir_all(path.parent().unwrap_or(&dir.root));
                     let _ = std::fs::write(path, patch);
                 }
-                // The evidence, into the ticket, as it happened: every check with its output,
-                // then the files the stage names. Written now, so a failed try is on record too.
+                // The evidence, into the ticket, as it happened: the checks before the fix on
+                // the first try, every check with its output, the change, then the files the
+                // stage names. Written now, so a failed try is on record too.
                 if let (Some(to), Some(ev)) = (&evidence_to, &stage.evidence) {
-                    match append_evidence(&wt, to, &stage.id, attempt, &run_id, &results, &ev.files)
-                    {
-                        Ok(n) => rec.record(
-                            Source::Witnessed,
-                            Some(&stage.id),
-                            format!("evidence: {n} item(s) appended to {to}"),
-                        )?,
+                    match append_evidence(
+                        &wt,
+                        to,
+                        &stage.id,
+                        attempt,
+                        &run_id,
+                        (attempt == 1).then_some((stage_base.as_str(), before.as_slice())),
+                        &results,
+                        patch.as_deref(),
+                        &ev.files,
+                    ) {
+                        Ok((n, text)) => {
+                            appended.push_str(&text);
+                            rec.record(
+                                Source::Witnessed,
+                                Some(&stage.id),
+                                format!("evidence: {n} item(s) appended to {to}"),
+                            )?
+                        }
                         Err(e) => rec.record(
                             Source::Witnessed,
                             Some(&stage.id),

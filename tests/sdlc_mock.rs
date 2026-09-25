@@ -53,6 +53,8 @@ struct Ticket {
     fix: &'static str,
     diff_line: &'static str,
     log_line: &'static str,
+    /// The criterion the bug breaks, as the before block shows it.
+    fails_before: &'static str,
 }
 
 const JAVA: &str = "src/main/java/com/example/accounts/LedgerService.java";
@@ -63,18 +65,21 @@ const TICKETS: [Ticket; 3] = [
         fix: "s/BigDecimal total = null;/BigDecimal total = BigDecimal.ZERO;/; s/total = total == null ? p : total.add(p);/total = total.add(p);/",
         diff_line: "+        BigDecimal total = BigDecimal.ZERO;",
         log_line: "balance for ACC-2: 0.00",
+        fails_before: "FAIL AC2:",
     },
     Ticket {
         id: "BUG-102",
         fix: "s/ledger.get(accountId)/ledger.get(accountId.toUpperCase(java.util.Locale.ROOT))/",
         diff_line: "+        List<BigDecimal> postings = ledger.get(accountId.toUpperCase(java.util.Locale.ROOT));",
         log_line: "balance for acc-1: 150.00",
+        fails_before: "FAIL AC1:",
     },
     Ticket {
         id: "BUG-103",
         fix: "s/RoundingMode.HALF_EVEN/RoundingMode.HALF_UP/",
         diff_line: "+        BigDecimal balance = total.setScale(2, RoundingMode.HALF_UP);",
         log_line: "balance for ACC-3: 10.01",
+        fails_before: "FAIL AC1:",
     },
 ];
 
@@ -205,10 +210,19 @@ fn one_ticket(t: &Ticket) {
         .unwrap();
     let ticket = String::from_utf8_lossy(&ticket.stdout);
     assert!(ticket.contains("## Evidence"), "{ticket}");
+    // Before the fix the ticket's own criterion fails; after it every one passes.
+    let (before, after) = ticket
+        .split_once("**After the fix**")
+        .unwrap_or_else(|| panic!("{}: no before/after in {ticket}", t.id));
+    assert!(before.contains("**Before the fix**"), "{}: {ticket}", t.id);
+    assert!(before.contains(t.fails_before), "{}: {before}", t.id);
     for ac in ["PASS AC1:", "PASS AC2:", "PASS AC3:"] {
-        assert!(ticket.contains(ac), "{}: {ticket}", t.id);
+        assert!(after.contains(ac), "{}: {after}", t.id);
     }
-    assert!(!ticket.contains("FAIL AC"), "{ticket}");
+    assert!(!after.contains("FAIL AC"), "{after}");
+    assert!(after.contains("- **change**: 1 file(s)"), "{after}");
+    assert!(after.contains(t.diff_line), "{}: {after}", t.id);
+    assert!(!after.contains("sun.misc.Unsafe"), "{after}");
     assert!(ticket.contains("**logs/app.log**"), "{ticket}");
     assert!(ticket.contains(t.log_line), "{}: {ticket}", t.id);
     assert!(

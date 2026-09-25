@@ -24,9 +24,16 @@ pub fn read(dir: &RunDir, stage: &str) -> Option<Decision> {
     serde_json::from_str(&text).ok()
 }
 
-/// Records the decision. A second decision on the same stage is refused: the first one is
+/// Records the decision. A decision with no note is refused: the record has to say what was
+/// checked, or why not. A second decision on the same stage is refused: the first one is
 /// what the run acted on.
 pub fn write(dir: &RunDir, stage: &str, d: &Decision) -> std::io::Result<()> {
+    if d.note.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a decision needs a note: what you checked, or why not",
+        ));
+    }
     let p = path(dir, stage);
     if p.exists() {
         return Err(std::io::Error::new(
@@ -47,5 +54,30 @@ impl Decision {
         } else {
             "rejected"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_decision_without_a_note_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = RunDir::create(d.path(), "R1").unwrap();
+        let mut dec = Decision {
+            approved: true,
+            by: "PO".into(),
+            note: "  ".into(),
+            at: crate::store::now(),
+        };
+        assert_eq!(
+            write(&dir, "review", &dec).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert!(read(&dir, "review").is_none());
+        dec.note = "AC1-3 shown".into();
+        write(&dir, "review", &dec).unwrap();
+        assert_eq!(read(&dir, "review"), Some(dec));
     }
 }

@@ -311,10 +311,11 @@ async function runPage(main, id) {
   function waitingPanel(w) {
     const field = "width:100%;box-sizing:border-box;font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px";
     const tool = w.ask !== undefined && w.ask !== null;
-    const note = h("textarea", { rows: 3, placeholder: tool ? "note for the record: why, or why not" : "note for the record: what you checked, or why not", style: field + ";margin:8px 0" });
+    const note = h("textarea", { rows: 3, placeholder: tool ? "note for the record: why, or why not (optional)" : "note for the record: what you checked, or why not (required)", style: field + ";margin:8px 0" });
     const by = h("input", { value: w.who, style: field, title: "who decides" });
     const status = h("div", { class: "notes" });
     const send = async (yes) => {
+      if (!tool && !note.value.trim()) { status.textContent = "say what you checked, or why not: a decision needs a note"; note.focus(); return; }
       status.textContent = "recording…";
       const url = tool ? `/api/runs/${id}/answer` : `/api/runs/${id}/decide`;
       const body = tool ? { ask: w.ask, allowed: yes, by: by.value, note: note.value } : { stage: w.stage, approved: yes, by: by.value, note: note.value };

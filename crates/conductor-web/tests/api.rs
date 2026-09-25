@@ -147,11 +147,19 @@ fn only_conductors_own_paths_are_served() {
         .status_code()
         .0
     };
+    // No note, no decision: the record has to say what was checked.
     assert_eq!(
         decide(r#"{"stage":"review","approved":true,"by":"PO"}"#),
+        400
+    );
+    assert_eq!(
+        decide(r#"{"stage":"review","approved":true,"by":"PO","note":"AC1-3 shown"}"#),
         200
     );
-    assert_eq!(decide(r#"{"stage":"review","approved":false}"#), 409);
+    assert_eq!(
+        decide(r#"{"stage":"review","approved":false,"note":"again"}"#),
+        409
+    );
     assert_eq!(decide(r#"{"stage":"../x","approved":true}"#), 400);
     let d1 =
         conductor_engine::decision::read(&RunDir::for_run(d.path(), "0MUAAAAAAAAA1"), "review")

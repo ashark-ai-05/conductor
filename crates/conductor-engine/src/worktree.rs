@@ -125,13 +125,21 @@ pub fn commit_as_conductor(wt: &Path, msg: &str) -> Result<String, GitError> {
 /// Everything the worktree changed since `base`, as one patch: tracked changes, plus each
 /// new file against nothing, so an attempt's diff shows what it added as well as what it
 /// edited.
-pub fn diff_from(wt: &Path, base: &str) -> Result<String, GitError> {
-    let mut patch = git(wt, &["diff", "--no-ext-diff", "--no-color", base, "--"])?;
+pub fn diff_from(wt: &Path, base: &str, exclude: Option<&str>) -> Result<String, GitError> {
+    let mut args = vec!["diff", "--no-ext-diff", "--no-color", base, "--", "."];
+    let not = exclude.map(|e| format!(":(exclude){e}"));
+    if let Some(n) = &not {
+        args.push(n);
+    }
+    let mut patch = git(wt, &args)?;
     if !patch.is_empty() && !patch.ends_with('\n') {
         patch.push('\n');
     }
     let untracked = git(wt, &["ls-files", "--others", "--exclude-standard"])?;
-    for f in untracked.lines().filter(|l| !l.is_empty()) {
+    for f in untracked
+        .lines()
+        .filter(|l| !l.is_empty() && Some(*l) != exclude)
+    {
         // `--no-index` exits 1 when the files differ, which they always do here.
         let out = Command::new("git")
             .arg("-C")

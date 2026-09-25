@@ -20,8 +20,8 @@ usage:
                 [--executor herdr|headless]
                                      run a workflow and write its receipt; in herdr
                                      each run gets a tab and each stage a pane
-  conductor approve <run-id> [--stage <id>] [--by <who>] [-m <note>]
-  conductor reject  <run-id> [--stage <id>] [--by <who>] [-m <note>]
+  conductor approve <run-id> -m <what you checked> [--stage <id>] [--by <who>]
+  conductor reject  <run-id> -m <why not> [--stage <id>] [--by <who>]
                                      decide a `human` stage the run is waiting on
   conductor allow <run-id> [--by <who>] [-m <note>]
   conductor deny  <run-id> [--by <who>] [-m <note>]
@@ -459,8 +459,11 @@ fn decide(args: &[String], approved: bool) -> Result<ExitCode> {
     }
     let word = if approved { "approve" } else { "reject" };
     let Some(run_id) = run_id else {
-        bail!("usage: conductor {word} <run-id> [--stage <id>] [--by <who>] [-m <note>]")
+        bail!("usage: conductor {word} <run-id> -m <note> [--stage <id>] [--by <who>]")
     };
+    if note.trim().is_empty() {
+        bail!("conductor {word} needs -m: what you checked, or why not. The note is the record.");
+    }
     let repo = repo_root()?;
     let dir = conductor_engine::store::RunDir::for_run(&repo, &run_id);
     // The stage: the one given, else the one the run is waiting on.
@@ -694,7 +697,7 @@ impl conductor_tui::app::RunSource for RepoRuns {
     fn stats(&self) -> Option<[(String, String); 3]> {
         conductor_engine::metrics::headline_stats(&self.0)
     }
-    fn decide(&self, run_id: &str, stage: &str, approved: bool) -> Result<(), String> {
+    fn decide(&self, run_id: &str, stage: &str, approved: bool, note: &str) -> Result<(), String> {
         let who = conductor_engine::live::read(&self.0, run_id)
             .and_then(|l| l.waiting)
             .map(|w| w.who)
@@ -703,7 +706,7 @@ impl conductor_tui::app::RunSource for RepoRuns {
         let d = conductor_engine::decision::Decision {
             approved,
             by: who,
-            note: "from the terminal UI".into(),
+            note: note.to_owned(),
             at: conductor_engine::store::now(),
         };
         conductor_engine::decision::write(

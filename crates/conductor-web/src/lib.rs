@@ -163,6 +163,9 @@ fn decide(repo: &Path, id: &str, body: &str) -> Reply {
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
             text(409, "text/plain; charset=utf-8", e.to_string())
         }
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+            text(400, "text/plain; charset=utf-8", e.to_string())
+        }
         Err(e) => text(500, "text/plain; charset=utf-8", e.to_string()),
     }
 }
