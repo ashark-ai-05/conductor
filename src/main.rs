@@ -23,6 +23,9 @@ usage:
   conductor approve <run-id> [--stage <id>] [--by <who>] [-m <note>]
   conductor reject  <run-id> [--stage <id>] [--by <who>] [-m <note>]
                                      decide a `human` stage the run is waiting on
+  conductor allow <run-id> [--by <who>] [-m <note>]
+  conductor deny  <run-id> [--by <who>] [-m <note>]
+                                     answer a tool the agent asked for and is waiting on
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
   conductor deliver [<run-id>] [--ready] [--base <branch>] [--remote <name>] [--no-pr]
@@ -85,6 +88,9 @@ fn real_main() -> Result<ExitCode> {
         Some("receipt") => receipt(&args[1..]),
         Some("approve") => decide(&args[1..], true),
         Some("reject") => decide(&args[1..], false),
+        Some("allow") => answer(&args[1..], true),
+        Some("deny") => answer(&args[1..], false),
+        Some("ask") => ask_server(&args[1..]),
         Some("verify") => verify_cmd(&args[1..]),
         Some("trace") => trace_cmd(&args[1..]),
         Some("stats") => stats_cmd(&args[1..]),
@@ -482,6 +488,74 @@ fn decide(args: &[String], approved: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Answers the tool the run's agent is waiting on: the oldest unanswered ask.
+fn answer(args: &[String], allowed: bool) -> Result<ExitCode> {
+    let mut run_id = None;
+    let mut by = None;
+    let mut note = String::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--by" => by = Some(it.next().context("--by needs a name")?.clone()),
+            "-m" => note = it.next().context("-m needs text")?.clone(),
+            other if other.starts_with('-') => bail!("unknown option `{other}`"),
+            other => run_id = Some(other.to_owned()),
+        }
+    }
+    let word = if allowed { "allow" } else { "deny" };
+    let Some(run_id) = run_id else {
+        bail!("usage: conductor {word} <run-id> [--by <who>] [-m <note>]")
+    };
+    let repo = repo_root()?;
+    let dir = conductor_engine::ask::dir(&conductor_engine::store::RunDir::for_run(&repo, &run_id));
+    let Some(ask) = conductor_engine::ask::pending(&dir) else {
+        bail!("run {run_id} is not waiting on a tool");
+    };
+    let by = by
+        .or_else(|| {
+            conductor_engine::live::read(&repo, &run_id)
+                .and_then(|l| l.waiting)
+                .map(|w| w.who)
+        })
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "someone".into());
+    let a = conductor_engine::ask::Answer {
+        allowed,
+        by: by.clone(),
+        note,
+        at: conductor_engine::store::now(),
+    };
+    conductor_engine::ask::write_answer(&dir, ask.id, &a)
+        .with_context(|| format!("recording the answer to ask {}", ask.id))?;
+    println!("{}: {} by {by}", ask.describe(), a.word());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The MCP server Claude Code's `--permission-prompt-tool` calls, over stdin and stdout.
+/// The engine starts it through the agent; it is not for typing.
+fn ask_server(args: &[String]) -> Result<ExitCode> {
+    let mut dir = None;
+    let mut who = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = Some(PathBuf::from(it.next().context("--dir needs a path")?)),
+            "--who" => who = Some(it.next().context("--who needs a name")?.clone()),
+            other => bail!("unknown option `{other}` for `conductor ask`"),
+        }
+    }
+    let dir = dir.context("usage: conductor ask --dir <asks-dir> --who <who>")?;
+    let who = who.unwrap_or_else(|| "someone".into());
+    conductor_engine::ask::serve(
+        &dir,
+        &who,
+        conductor_engine::ask::WAIT,
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+    )?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn serve(args: &[String]) -> Result<ExitCode> {
     let mut port: u16 = 7476;
     let mut bind = "127.0.0.1".to_string();
@@ -636,6 +710,25 @@ impl conductor_tui::app::RunSource for RepoRuns {
             &conductor_engine::store::RunDir::for_run(&self.0, run_id),
             stage,
             &d,
+        )
+        .map_err(|e| e.to_string())
+    }
+    fn answer(&self, run_id: &str, ask: u32, allowed: bool) -> Result<(), String> {
+        let who = conductor_engine::live::read(&self.0, run_id)
+            .and_then(|l| l.waiting)
+            .map(|w| w.who)
+            .or_else(|| std::env::var("USER").ok())
+            .unwrap_or_else(|| "someone".into());
+        let a = conductor_engine::ask::Answer {
+            allowed,
+            by: who,
+            note: "from the terminal UI".into(),
+            at: conductor_engine::store::now(),
+        };
+        conductor_engine::ask::write_answer(
+            &conductor_engine::ask::dir(&conductor_engine::store::RunDir::for_run(&self.0, run_id)),
+            ask,
+            &a,
         )
         .map_err(|e| e.to_string())
     }

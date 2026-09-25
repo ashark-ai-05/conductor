@@ -223,7 +223,7 @@ async function runPage(main, id) {
       const key = e.stage && e.attempt ? `${e.stage}-${e.attempt}` : null;
       if (key && key !== lastBandKey && bands.has(key)) { flush(); currentBand = bands.get(key); lastBandKey = key; frag.append(bandEl(currentBand, cursor)); }
       if (e.kind === "action") { pendingActions.push(e); continue; }
-      if (e.kind === "refused") { flush(); frag.append(row(e)); continue; }
+      if (e.kind === "refused" || e.kind === "asked") { flush(); frag.append(row(e)); continue; }
       flush();
       frag.append(row(e));
     }
@@ -282,6 +282,7 @@ async function runPage(main, id) {
     if (e.kind === "inferred") return ["inferred: ", e.text];
     if (e.kind === "decision") return [h("b", {}, "decided "), e.text];
     if (e.kind === "refused") return [h("b", {}, "refused "), e.text.replace(/^refused: /, ""), h("div", { class: "notes", style: "font-size:12px" }, "nobody can approve this in a headless run")];
+    if (e.kind === "asked") return [h("b", {}, "asked "), e.text.replace(/^asked: /, ""), h("div", { class: "notes", style: "font-size:12px" }, "the agent waits for an answer; the stage clock is stopped")];
     return [e.text];
   }
   function legend() {
@@ -305,25 +306,32 @@ async function runPage(main, id) {
       h("tr", {}, h("td", {}, "record"), h("td", {}, `chain ${i.chain_head.slice(0, 19)}… · ${i.anchored_in ? "anchored in " + i.anchored_in.slice(0, 12) : "not anchored"} · ${i.reproduces ? "re-checks cleanly" : "not re-checked"}`)),
       h("tr", {}, h("td", {}, "verify"), h("td", {}, h("code", {}, `conductor verify ${s.run_id}`))))));
   }
-  // The run is paused for a person. Their decision is the one thing this page writes.
+  // The run is paused for a person: a stage's decision, or a tool the agent asked for.
+  // Their answer is the one thing this page writes.
   function waitingPanel(w) {
     const field = "width:100%;box-sizing:border-box;font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px";
-    const note = h("textarea", { rows: 3, placeholder: "note for the record: what you checked, or why not", style: field + ";margin:8px 0" });
+    const tool = w.ask !== undefined && w.ask !== null;
+    const note = h("textarea", { rows: 3, placeholder: tool ? "note for the record: why, or why not" : "note for the record: what you checked, or why not", style: field + ";margin:8px 0" });
     const by = h("input", { value: w.who, style: field, title: "who decides" });
     const status = h("div", { class: "notes" });
-    const send = async (approved) => {
+    const send = async (yes) => {
       status.textContent = "recording…";
+      const url = tool ? `/api/runs/${id}/answer` : `/api/runs/${id}/decide`;
+      const body = tool ? { ask: w.ask, allowed: yes, by: by.value, note: note.value } : { stage: w.stage, approved: yes, by: by.value, note: note.value };
+      const word = tool ? (yes ? "allowed" : "denied") : (yes ? "approved" : "rejected");
       try {
-        const r = await fetch(`/api/runs/${id}/decide`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: w.stage, approved, by: by.value, note: note.value }) });
-        status.textContent = r.ok ? `${approved ? "approved" : "rejected"}; the run continues` : `not recorded: ${await r.text()}`;
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        status.textContent = r.ok ? `${word}; the run continues` : `not recorded: ${await r.text()}`;
       } catch (e) { status.textContent = "not recorded: " + e.message; }
     };
     return h("div", { class: "panel", style: "border-color:var(--run)" },
       h("h3", {}, `waiting for ${w.who}`, h("small", {}, `stage ${w.stage} · since ${ago(w.since)}`)),
       h("p", { style: "margin:0 0 6px" }, w.question),
-      h("div", { class: "notes", style: "font-size:12px" }, "The evidence is in the ticket and in the lanes to the left. Approve only what you have checked."),
+      h("div", { class: "notes", style: "font-size:12px" }, tool
+        ? "The agent is stopped on this until you answer, and the stage clock is stopped with it. Allow only what you would run yourself."
+        : "The evidence is in the ticket and in the lanes to the left. Approve only what you have checked."),
       by, note,
-      h("div", { style: "display:flex;gap:8px" }, h("button", { class: "on", onclick: () => send(true) }, "✓ approve"), h("button", { onclick: () => send(false) }, "✗ reject")),
+      h("div", { style: "display:flex;gap:8px" }, h("button", { class: "on", onclick: () => send(true) }, tool ? "✓ allow" : "✓ approve"), h("button", { onclick: () => send(false) }, tool ? "✗ deny" : "✗ reject")),
       status);
   }
   function livePanel(l) {

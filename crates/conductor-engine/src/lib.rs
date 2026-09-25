@@ -4,6 +4,7 @@
 //! what happens next is a rule over recorded facts.
 
 pub mod agent_panes;
+pub mod ask;
 pub mod decision;
 pub mod deliver;
 pub mod engine;

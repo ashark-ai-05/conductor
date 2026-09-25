@@ -93,9 +93,12 @@ page in `conductor serve`, with `y` / `n` in `conductor ui`, or with
 `conductor approve <run> --by PO -m "…"` and `conductor reject`.
 
 What the agent does is on the record as it happens, so a person watching can tell working
-from stuck. A tool the agent asks for and is refused (it is outside `allowed_tools`, and
-headless nobody can approve it) shows the moment it happens, on the page and in the
-receipt's notes.
+from stuck. A tool the agent asks for that is outside `allowed_tools` is put to a person:
+the stage's `who`, else whoever started the run. The question shows the moment it is asked,
+on the run's page, in `conductor ui` (`y` / `n`), and for `conductor allow <run>` /
+`conductor deny <run> -m "…"`. The agent waits, and the stage clock stops with it; the
+answer and the time spent waiting are on the record. Nobody answering within a day is a
+deny in nobody's name.
 
 `examples/sdlc-mock/` is a Spring Boot service with one real bug, a ticket, a local
 deploy and a log: the team's loop, small enough to run end to end in a minute. Its README

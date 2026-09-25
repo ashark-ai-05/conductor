@@ -70,6 +70,10 @@ pub struct Waiting {
     /// What they are asked to decide, from the stage's prompt.
     pub question: String,
     pub since: String,
+    /// Set when the question is a tool the agent asked for (`asks/<n>.json`), answered
+    /// with `conductor allow` or `deny`; unset for a `human` stage's decision.
+    #[serde(default)]
+    pub ask: Option<u32>,
 }
 
 impl LiveRun {

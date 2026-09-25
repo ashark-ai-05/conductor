@@ -63,6 +63,10 @@ pub trait RunSource {
     fn decide(&self, _run_id: &str, _stage: &str, _approved: bool) -> Result<(), String> {
         Err("deciding is not available here".into())
     }
+    /// Records a person's answer to a tool the run's agent asked for.
+    fn answer(&self, _run_id: &str, _ask: u32, _allowed: bool) -> Result<(), String> {
+        Err("answering is not available here".into())
+    }
 }
 
 pub struct App {
@@ -407,14 +411,24 @@ impl App {
                 self.status = Some("paused — p again to resume (demo)".into())
             }
             KeyCode::Char(c @ ('y' | 'n')) if self.live.waiting.is_some() => {
-                let approved = c == 'y';
+                let yes = c == 'y';
                 let w = self.live.waiting.clone().unwrap();
-                let word = if approved { "approved" } else { "rejected" };
-                self.status = Some(match &self.source {
-                    Some(src) => match src.decide(&self.live.run_id, &w.stage, approved) {
-                        Ok(()) => format!("{}: {word} as {}; the run continues", w.stage, w.who),
-                        Err(e) => format!("not recorded: {e}"),
-                    },
+                // A tool the agent asked for, or a stage's decision.
+                let (word, recorded) = match (w.ask, &self.source) {
+                    (Some(ask), Some(src)) => (
+                        if yes { "allowed" } else { "denied" },
+                        Some(src.answer(&self.live.run_id, ask, yes)),
+                    ),
+                    (None, Some(src)) => (
+                        if yes { "approved" } else { "rejected" },
+                        Some(src.decide(&self.live.run_id, &w.stage, yes)),
+                    ),
+                    (Some(_), None) => (if yes { "allowed" } else { "denied" }, None),
+                    (None, None) => (if yes { "approved" } else { "rejected" }, None),
+                };
+                self.status = Some(match recorded {
+                    Some(Ok(())) => format!("{}: {word} as {}; the run continues", w.stage, w.who),
+                    Some(Err(e)) => format!("not recorded: {e}"),
                     None => format!("{}: {word} (demo)", w.stage),
                 });
             }

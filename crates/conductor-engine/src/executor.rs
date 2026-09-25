@@ -4,9 +4,11 @@
 //! read from the agent's own stream are `observed`, token counts are `measured`, and anything
 //! it can't see is left out rather than guessed.
 
+use crate::ask::{self, Answer, Ask};
 use conductor_checks::runner::{self, Ended};
 use conductor_model::workflow::{Agent, PermissionMode};
 use serde::Serialize;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,6 +25,15 @@ pub struct Brief {
     pub attempt: usize,
     /// Extra environment for the agent, such as the pane-control grant in a headless run.
     pub env: Vec<(String, String)>,
+    /// Where a tool the agent asks for is put to a person, when there is one to ask.
+    pub ask: Option<AskChannel>,
+}
+
+/// The run's asks directory and who answers, handed to the agent as its permission tool.
+#[derive(Debug, Clone)]
+pub struct AskChannel {
+    pub dir: PathBuf,
+    pub who: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -62,8 +73,13 @@ pub struct AgentRun {
     pub duration_ms: u64,
     /// herdr's readings (pane opened, agent idle, waiting for you): recorded as `inferred`.
     pub inferred: Vec<String>,
-    /// Tools the agent asked for and was refused.
+    /// Tools the agent asked for and was refused with nobody to ask.
     pub refused: Vec<ToolCall>,
+    /// Tools the agent asked a person for, and how many of those were denied.
+    pub asked: usize,
+    pub denied: usize,
+    /// Time spent waiting for a person, with the stage clock stopped.
+    pub waited_ms: u64,
 }
 
 /// Something seen while the agent works, handed over as it happens.
@@ -71,9 +87,16 @@ pub struct AgentRun {
 pub enum Observed {
     /// A tool the agent used.
     Tool(ToolCall),
-    /// A tool the agent asked for and was refused: in a headless run nobody can approve it,
-    /// so the agent is on its own.
+    /// A tool the agent asked for and was refused with nobody to ask.
     Refused { call: ToolCall, why: String },
+    /// A tool the agent asked a person for; the agent waits.
+    Asked(Ask),
+    /// The person answered, after `waited`.
+    Answered {
+        ask: Ask,
+        answer: Answer,
+        waited: Duration,
+    },
 }
 
 pub trait Executor: Send + Sync {
@@ -171,8 +194,27 @@ impl ClaudeHeadless {
         if let Some(s) = &b.resume {
             a.extend(["--resume".into(), s.clone()]);
         }
+        if let Some(c) = &b.ask {
+            a.extend([
+                "--mcp-config".into(),
+                mcp_config(c).to_string(),
+                "--permission-prompt-tool".into(),
+                ask::PROMPT_TOOL.into(),
+            ]);
+        }
         a
     }
+}
+
+/// The MCP server Claude asks: this same binary, serving the run's asks directory.
+fn mcp_config(c: &AskChannel) -> serde_json::Value {
+    let me = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "conductor".into());
+    serde_json::json!({ "mcpServers": { ask::SERVER: {
+        "command": me,
+        "args": ["ask", "--dir", c.dir.display().to_string(), "--who", c.who]
+    } } })
 }
 
 impl Executor for ClaudeHeadless {
@@ -184,7 +226,39 @@ impl Executor for ClaudeHeadless {
         let argv = self.argv(b);
         let mut run = AgentRun::default();
         let mut stream = Stream::default();
-        let e = runner::run_streaming(
+        // Both the stream and the ask watcher report through `observe`.
+        let observe = RefCell::new(observe);
+        let mut watch = b.ask.as_ref().map(|c| ask::Watch::new(c.dir.clone()));
+        let (mut asked, mut denied, mut waited) = (0usize, 0usize, Duration::ZERO);
+        let mut look = |watch: &mut Option<ask::Watch>| {
+            let Some(w) = watch else { return false };
+            for seen in w.poll() {
+                let o = match seen {
+                    ask::Seen::Asked(a) => {
+                        asked += 1;
+                        Observed::Asked(a)
+                    }
+                    ask::Seen::Answered {
+                        ask,
+                        answer,
+                        waited: t,
+                    } => {
+                        waited += t;
+                        if !answer.allowed {
+                            denied += 1;
+                        }
+                        Observed::Answered {
+                            ask,
+                            answer,
+                            waited: t,
+                        }
+                    }
+                };
+                observe.borrow_mut()(o);
+            }
+            w.waiting()
+        };
+        let e = runner::run_pausable(
             &runner::Spec {
                 argv: &argv,
                 cwd: &b.cwd,
@@ -194,10 +268,16 @@ impl Executor for ClaudeHeadless {
                 inherit_env: true,
                 set_env: &b.env,
             },
-            &mut |line| stream.feed(line, &mut run, observe),
+            &mut |line| stream.feed(line, &mut run, &mut *observe.borrow_mut()),
+            &mut || look(&mut watch),
         );
+        // An answer that landed as the agent exited.
+        look(&mut watch);
         stream.finish(&mut run);
         run.duration_ms = e.duration_ms;
+        run.asked = asked;
+        run.denied = denied;
+        run.waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
         if e.ended != Ended::Exited {
             run.finished = false;
             run.reason = e.reason.clone();
@@ -246,11 +326,7 @@ impl Stream {
                             .and_then(|n| n.as_str())
                             .unwrap_or("?")
                             .to_owned();
-                        let input = c.get("input");
-                        let target = ["file_path", "path", "command", "pattern", "url"]
-                            .iter()
-                            .find_map(|k| input.and_then(|i| i.get(*k)).and_then(|x| x.as_str()))
-                            .map(str::to_owned);
+                        let target = c.get("input").and_then(ask::target_of);
                         let call = ToolCall { tool, target };
                         if let Some(id) = c.get("id").and_then(|i| i.as_str()) {
                             self.calls.insert(id.to_owned(), call.clone());
@@ -261,7 +337,8 @@ impl Stream {
                 }
             }
             // A refused tool comes back as an error result: Claude's permission system said
-            // no, and in a headless run there is nobody to say yes.
+            // no, and in a headless run there is nobody to say yes. A person's "denied by …"
+            // is an answer, already on the record from the asks directory.
             Some("user") => {
                 for c in v
                     .pointer("/message/content")
@@ -279,9 +356,10 @@ impl Stream {
                         .and_then(|x| x.as_str())
                         .unwrap_or("")
                         .trim();
-                    let refused = text.contains("requires approval")
-                        || text.contains("permission")
-                        || text.contains("not allowed");
+                    let refused = !text.starts_with("denied by ")
+                        && (text.contains("requires approval")
+                            || text.contains("permission")
+                            || text.contains("not allowed"));
                     if !refused {
                         continue;
                     }
@@ -432,6 +510,7 @@ mod tests {
             run_id: "r".into(),
             attempt: 1,
             env: vec![],
+            ask: None,
         };
         let started = Instant::now();
         let mut seen: Vec<(Observed, Duration)> = Vec::new();
@@ -445,6 +524,96 @@ mod tests {
         assert!(
             matches!(&seen[2].0, Observed::Refused { why, .. } if why.contains("requires approval"))
         );
+    }
+
+    #[test]
+    fn an_ask_pauses_the_clock_until_a_person_answers() {
+        // A stand-in claude that asks the way the MCP server would: it writes the ask file
+        // itself, waits for the answer, then reports the call and finishes.
+        let d = tempfile::tempdir().unwrap();
+        let asks = d.path().join("asks");
+        let fake = d.path().join("claude");
+        std::fs::write(
+            &fake,
+            format!(
+                r#"#!/bin/sh
+case "$*" in *"--permission-prompt-tool mcp__conductor__ask"*) ;; *) echo "no prompt tool: $*" >&2; exit 2;; esac
+mkdir -p {a}
+echo '{{"type":"system","subtype":"init","model":"claude-sonnet-5","session_id":"s1"}}'
+printf '{{"id":1,"tool":"Bash","target":"mvn -v","input":{{"command":"mvn -v"}},"since":"2026-09-25T00:00:00Z"}}' > {a}/1.json
+while [ ! -f {a}/1.answer.json ]; do sleep 0.1; done
+echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"mvn -v"}}}}]}}}}'
+echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"denied by krunal: not that"}}]}}}}'
+echo '{{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"ok","session_id":"s1"}}'
+"#,
+                a = asks.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let exec = ClaudeHeadless {
+            program: Some(fake.display().to_string()),
+        };
+        let brief = Brief {
+            stage: "fix".into(),
+            prompt: "fix it".into(),
+            cwd: d.path().to_path_buf(),
+            agent: Agent {
+                kind: "claude".into(),
+                command: vec![],
+                model: None,
+                permission_mode: PermissionMode::AcceptEdits,
+                allowed_tools: vec![],
+                who: None,
+            },
+            resume: None,
+            // Shorter than the wait below: only a paused clock lets this finish.
+            timeout: Duration::from_millis(800),
+            run_id: "r".into(),
+            attempt: 1,
+            env: vec![],
+            ask: Some(AskChannel {
+                dir: asks.clone(),
+                who: "krunal".into(),
+            }),
+        };
+        let answerer = {
+            let asks = asks.clone();
+            std::thread::spawn(move || {
+                while ask::pending(&asks).is_none() {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                std::thread::sleep(Duration::from_millis(1200));
+                ask::write_answer(
+                    &asks,
+                    1,
+                    &Answer {
+                        allowed: false,
+                        by: "krunal".into(),
+                        note: "not that".into(),
+                        at: crate::store::now(),
+                    },
+                )
+                .unwrap();
+            })
+        };
+        let mut seen: Vec<Observed> = Vec::new();
+        let run = exec.run(&brief, &mut |o| seen.push(o));
+        answerer.join().unwrap();
+        assert!(run.finished, "{:?}", run.reason);
+        assert!(matches!(&seen[0], Observed::Asked(a) if a.target.as_deref() == Some("mvn -v")));
+        // The answer and the tool call land in the same tick; their order is not a promise.
+        assert!(
+            seen.iter().any(|o| matches!(o, Observed::Answered { answer, waited, .. } if !answer.allowed && *waited >= Duration::from_secs(1))),
+            "{seen:?}"
+        );
+        assert!(seen.iter().any(|o| matches!(o, Observed::Tool(_))));
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        // A person's deny is not a headless refusal.
+        assert!(run.refused.is_empty());
+        assert_eq!((run.asked, run.denied), (1, 1));
+        assert!(run.waited_ms >= 1000, "{}", run.waited_ms);
     }
 
     #[test]
@@ -480,6 +649,7 @@ mod tests {
             run_id: "r".into(),
             attempt: 2,
             env: vec![],
+            ask: None,
         };
         let a = ClaudeHeadless::default().argv(&b);
         let joined = a.join(" ");
@@ -492,5 +662,27 @@ mod tests {
         ] {
             assert!(joined.contains(want), "{joined}");
         }
+        assert!(!joined.contains("--permission-prompt-tool"));
+
+        let b = Brief {
+            ask: Some(AskChannel {
+                dir: "/runs/R1/asks".into(),
+                who: "PO".into(),
+            }),
+            ..b
+        };
+        let a = ClaudeHeadless::default().argv(&b);
+        let i = a.iter().position(|x| x == "--mcp-config").unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&a[i + 1]).unwrap();
+        let server = &cfg["mcpServers"]["conductor"];
+        assert_eq!(
+            server["args"],
+            serde_json::json!(["ask", "--dir", "/runs/R1/asks", "--who", "PO"])
+        );
+        assert!(server["command"].as_str().unwrap().contains("conductor"));
+        assert!(
+            a.join(" ")
+                .contains("--permission-prompt-tool mcp__conductor__ask")
+        );
     }
 }

@@ -157,7 +157,31 @@ fn only_conductors_own_paths_are_served() {
         conductor_engine::decision::read(&RunDir::for_run(d.path(), "0MUAAAAAAAAA1"), "review")
             .unwrap();
     assert_eq!((d1.approved, d1.by.as_str()), (true, "PO"));
-    // The one write: a decision, once.
+    // The other write: an answer to a tool the agent asked for, once, and only to an ask
+    // that exists.
+    let asks = conductor_engine::ask::dir(&RunDir::for_run(d.path(), "0MUAAAAAAAAA1"));
+    conductor_engine::ask::write_ask(&asks, "Bash", serde_json::json!({"command": "ls"})).unwrap();
+    let answer = |body: &str| {
+        respond(
+            d.path(),
+            &Method::Post,
+            "/api/runs/0MUAAAAAAAAA1/answer",
+            body,
+        )
+        .status_code()
+        .0
+    };
+    assert_eq!(answer(r#"{"ask":2,"allowed":true}"#), 404);
+    assert_eq!(
+        answer(r#"{"ask":1,"allowed":false,"by":"krunal","note":"not that"}"#),
+        200
+    );
+    assert_eq!(answer(r#"{"ask":1,"allowed":true}"#), 409);
+    let a1 = conductor_engine::ask::read_answer(&asks, 1).unwrap();
+    assert_eq!(
+        (a1.allowed, a1.by.as_str(), a1.note.as_str()),
+        (false, "krunal", "not that")
+    );
     let (_, stats) = body(d.path(), "/api/stats");
     assert!(stats.contains("conductor.catches"));
 }

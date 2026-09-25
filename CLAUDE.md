@@ -32,6 +32,9 @@ reviews) → PR (Bitbucket; agents and people review) → merge → deploy to pr
 - `examples/sdlc-mock`: Spring Boot service, BUG-101, deploy-and-test, the `bugfix`
   workflow. `tests/sdlc_mock.rs` runs it end to end.
 - Claude agents' tool calls and refusals are recorded as they happen.
+- A tool the agent asks for is answered by a person: `conductor ask` is Claude's
+  `--permission-prompt-tool` (an MCP server over the run's `asks/` files); the run page,
+  the TUI and `conductor allow`/`deny` answer it; the stage clock stops while it waits.
 
 ## Current scope card (fix → review)
 
@@ -42,11 +45,10 @@ at work would accept this" are both yes. Stop means: approving without reading.
 
 ## Next, in order
 
-1. Answer a refused tool from the run page (Claude's `--permission-prompt-tool`).
-2. Show the ticket's evidence on the review panel (today it says "in the ticket" but
+1. Show the ticket's evidence on the review panel (today it says "in the ticket" but
    does not show it).
-3. Two more mock tickets for the three-ticket test.
-4. Then, only after the test: investigate stage, rejection looping back to fix, Amp or
+2. Two more mock tickets for the three-ticket test.
+3. Then, only after the test: investigate stage, rejection looping back to fix, Amp or
    Copilot as an agent, Jira/Bamboo/Bitbucket over MCP.
 
 ## Later list (not now)

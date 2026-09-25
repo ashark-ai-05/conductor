@@ -135,6 +135,10 @@ pub struct Execution {
     pub ended: Ended,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
+    /// Time the clock was stopped while the command waited on a person; part of
+    /// `duration_ms`, not counted towards the timeout.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub paused_ms: u64,
     #[serde(skip)]
     pub stdout: Vec<u8>,
     pub stdout_truncated: bool,
@@ -153,6 +157,7 @@ impl Execution {
             ended: Ended::NotRun,
             exit_code: None,
             duration_ms: 0,
+            paused_ms: 0,
             stdout: Vec::new(),
             stdout_truncated: false,
             stdout_sha256: empty.clone(),
@@ -243,20 +248,35 @@ fn capture(mut stream: impl Read, keep_all: bool, lines: Option<mpsc::Sender<Str
 }
 
 pub fn run(spec: &Spec) -> Execution {
-    run_impl(spec, None)
+    run_impl(spec, None, None)
 }
 
 /// Like [`run`], and `on_line` sees each line of stdout as the command writes it, so a
 /// long-running agent can be watched. Everything else, the hashes, the timeout, the
 /// group kill, is the same.
 pub fn run_streaming(spec: &Spec, on_line: &mut dyn FnMut(&str)) -> Execution {
-    run_impl(spec, Some(on_line))
+    run_impl(spec, Some(on_line), None)
+}
+
+/// Like [`run_streaming`], and `paused` is asked on every tick of the wait whether the
+/// command is waiting on a person. While it says so, the clock stops: that time does not
+/// count towards the timeout, and it is returned as `Execution::paused_ms`.
+pub fn run_pausable(
+    spec: &Spec,
+    on_line: &mut dyn FnMut(&str),
+    paused: &mut dyn FnMut() -> bool,
+) -> Execution {
+    run_impl(spec, Some(on_line), Some(paused))
 }
 
 /// How often the wait loop looks for new lines.
 const TICK: Duration = Duration::from_millis(50);
 
-fn run_impl(spec: &Spec, mut on_line: Option<&mut dyn FnMut(&str)>) -> Execution {
+fn run_impl(
+    spec: &Spec,
+    mut on_line: Option<&mut dyn FnMut(&str)>,
+    mut paused: Option<&mut dyn FnMut() -> bool>,
+) -> Execution {
     let Some(program) = spec.argv.first().filter(|p| !p.trim().is_empty()) else {
         return Execution::not_run(spec.argv, "the command is empty".into());
     };
@@ -318,14 +338,24 @@ fn run_impl(spec: &Spec, mut on_line: Option<&mut dyn FnMut(&str)>) -> Execution
 
     // Wait for the exit, with a deadline, handing over stdout lines meanwhile. Nothing here
     // blocks without one.
-    let deadline = started + spec.timeout;
+    let mut deadline = started + spec.timeout;
+    let mut paused_for = Duration::ZERO;
+    let mut last_tick = Instant::now();
     let (ended, exit_code, mut reason) = loop {
         if let Some(f) = &mut on_line {
             while let Ok(l) = line_rx.try_recv() {
                 f(&l);
             }
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        // A pause moves the deadline out by the time that passed since the last tick.
+        let now = Instant::now();
+        if paused.as_mut().is_some_and(|p| p()) {
+            let slept = now.duration_since(last_tick);
+            deadline += slept;
+            paused_for += slept;
+        }
+        last_tick = now;
+        let left = deadline.saturating_duration_since(now);
         match exited.recv_timeout(left.min(TICK)) {
             Ok(Ok(status)) => break (Ended::Exited, status.code(), None),
             Ok(Err(e)) => {
@@ -359,6 +389,7 @@ fn run_impl(spec: &Spec, mut on_line: Option<&mut dyn FnMut(&str)>) -> Execution
         }
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let paused_ms = u64::try_from(paused_for.as_millis()).unwrap_or(u64::MAX);
 
     let out = out_rx.recv_timeout(GRACE).ok();
     if let Some(f) = &mut on_line {
@@ -389,6 +420,7 @@ fn run_impl(spec: &Spec, mut on_line: Option<&mut dyn FnMut(&str)>) -> Execution
         ended,
         exit_code,
         duration_ms,
+        paused_ms,
         stdout: out.kept,
         stdout_truncated: out.truncated,
         stdout_sha256: out.sha256,
@@ -398,9 +430,62 @@ fn run_impl(spec: &Spec, mut on_line: Option<&mut dyn FnMut(&str)>) -> Execution
     }
 }
 
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paused_clock_does_not_count_towards_the_timeout() {
+        // Two seconds of work under a one-second timeout, paused throughout: it finishes.
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 2; echo ok".into(),
+        ];
+        let dir = std::env::temp_dir();
+        let e = run_pausable(
+            &Spec {
+                argv: &argv,
+                cwd: &dir,
+                timeout: Duration::from_secs(1),
+                pass_env: &[],
+                run_id: "r3",
+                inherit_env: false,
+                set_env: &[],
+            },
+            &mut |_| {},
+            &mut || true,
+        );
+        assert_eq!(e.ended, Ended::Exited, "{:?}", e.reason);
+        assert_eq!(e.stdout_text(), "ok\n");
+        assert!(e.paused_ms >= 1500, "{}", e.paused_ms);
+        assert!(e.duration_ms >= e.paused_ms);
+    }
+
+    #[test]
+    fn an_unpaused_clock_still_times_out() {
+        let argv = vec!["sh".to_string(), "-c".to_string(), "sleep 3".into()];
+        let dir = std::env::temp_dir();
+        let e = run_pausable(
+            &Spec {
+                argv: &argv,
+                cwd: &dir,
+                timeout: Duration::from_millis(300),
+                pass_env: &[],
+                run_id: "r4",
+                inherit_env: false,
+                set_env: &[],
+            },
+            &mut |_| {},
+            &mut || false,
+        );
+        assert_eq!(e.ended, Ended::TimedOut);
+        assert_eq!(e.paused_ms, 0);
+    }
 
     fn sh(script: &str, timeout: Duration) -> Execution {
         let argv = vec!["sh".to_string(), "-c".to_string(), script.to_string()];

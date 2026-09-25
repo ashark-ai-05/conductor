@@ -3,7 +3,8 @@
 //! the agents themselves.
 
 use crate::agent_panes;
-use crate::executor::{self, AgentRun, Brief};
+use crate::ask;
+use crate::executor::{self, AgentRun, AskChannel, Brief};
 use crate::herdr_exec::PaneOutcome;
 use crate::live::Live;
 use crate::receipt::{self, StageRecord};
@@ -165,6 +166,7 @@ fn human_stage(
         who: who.clone(),
         question: question.to_owned(),
         since: crate::store::now(),
+        ask: None,
     }));
     live.save(rec);
     let started = Instant::now();
@@ -698,6 +700,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let mut records: Vec<StageRecord> = Vec::new();
     let mut run_verdict = Verdict::Passed;
     let mut actions_seen = 0usize;
+    // Time agents spent waiting on a person, which no clock counts.
+    let mut waited_total = Duration::ZERO;
     let mut unmanaged_seen: BTreeSet<String> = BTreeSet::new();
     let pane_help = actions_path.as_ref().map(|_| pane_help());
 
@@ -767,7 +771,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
             break;
         }
         if let Some(limit) = total_budget
-            && started.elapsed() > limit
+            && started.elapsed().saturating_sub(waited_total) > limit
         {
             rec.record(
                 Source::Witnessed,
@@ -903,6 +907,17 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                         (None, Some(a)) => agent_panes::local_env(a, &stage.id),
                         _ => Vec::new(),
                     },
+                    // A tool the agent asks for goes to the stage's `who`, else to whoever
+                    // is running conductor.
+                    ask: Some(AskChannel {
+                        dir: ask::dir(&dir),
+                        who: stage
+                            .agent
+                            .who
+                            .clone()
+                            .or_else(|| std::env::var("USER").ok())
+                            .unwrap_or_else(|| "someone".into()),
+                    }),
                 };
                 // What the agent does is recorded as it happens, so a person watching can
                 // tell working from stuck, and a refusal shows the moment it lands.
@@ -910,24 +925,70 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 let agent = {
                     let (rec, live) = (&mut rec, &mut live);
                     let stage_id = stage.id.as_str();
+                    let who = brief
+                        .ask
+                        .as_ref()
+                        .map(|c| c.who.clone())
+                        .unwrap_or_default();
                     exec.run(&brief, &mut |o| {
                         seen_live += 1;
-                        let what = match &o {
-                            executor::Observed::Tool(c) => describe(c),
+                        let (source, what) = match &o {
+                            executor::Observed::Tool(c) => (Source::Observed, describe(c)),
                             executor::Observed::Refused { call, why } => {
                                 live.view.note = Some(format!(
                                     "the agent asked to run `{}` and was refused; headless, nobody can approve it",
                                     call.target.as_deref().unwrap_or(&call.tool)
                                 ));
-                                format!("refused: {} ({why})", describe(call))
+                                (Source::Observed, format!("refused: {} ({why})", describe(call)))
+                            }
+                            // The agent is stopped on a question; so is the stage clock.
+                            executor::Observed::Asked(a) => {
+                                live.waiting(Some(Waiting {
+                                    stage: stage_id.to_owned(),
+                                    who: who.clone(),
+                                    question: a.question(),
+                                    since: a.since.clone(),
+                                    ask: Some(a.id),
+                                }));
+                                (Source::Observed, format!("asked: {}", a.describe()))
+                            }
+                            executor::Observed::Answered { ask, answer, waited } => {
+                                live.waiting(None);
+                                let note = if answer.note.trim().is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(": {}", answer.note.trim())
+                                };
+                                let _ = rec.record(
+                                    Source::Human,
+                                    Some(stage_id),
+                                    format!("{} {} {}{note}", answer.by, answer.word(), ask.describe()),
+                                );
+                                (
+                                    Source::Witnessed,
+                                    format!(
+                                        "the agent waited {}s for {}; the stage clock was stopped",
+                                        waited.as_secs(),
+                                        answer.by
+                                    ),
+                                )
                             }
                         };
-                        if rec.record(Source::Observed, Some(stage_id), what).is_ok() {
+                        if rec.record(source, Some(stage_id), what).is_ok() {
                             live.save(rec);
                         }
                     })
                 };
                 record_agent(&mut rec, &stage.id, &agent, seen_live > 0)?;
+                if agent.asked > 0 {
+                    waited_total += Duration::from_millis(agent.waited_ms);
+                    stage_rec.note(&format!(
+                        "the agent asked for {} tool(s), {} denied, and waited {}s for an answer; that time is not counted against the stage",
+                        agent.asked,
+                        agent.denied,
+                        agent.waited_ms / 1000
+                    ));
+                }
                 if !agent.refused.is_empty() {
                     stage_rec.note(&format!(
                         "{} tool call(s) refused: the agent asked and nobody could approve; widen allowed_tools",

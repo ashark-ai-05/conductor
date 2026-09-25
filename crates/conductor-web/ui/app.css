@@ -166,6 +166,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .entry.decision { background: var(--sel); border-left-color: var(--warn); font-weight: 600; }
 .entry.refused { background: var(--fail-bg); border-left-color: var(--fail); }
 .lane-row.refused .spine i { background: var(--fail); }
+.entry.asked { border-left-color: var(--run); }
+.lane-row.asked .spine i { background: var(--run); }
 .lane-row.decision .spine i { background: var(--warn); }
 .entry .chk { font-weight: 600; margin-right: 6px; }
 .entry.hidden { display: none; }

@@ -379,9 +379,16 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
                     Span::styled(format!(" waiting for {} ", w.who), t.bold().bg(t.sel)),
                     Span::styled(format!("  stage {}   ", w.stage), t.dim()),
                     Span::styled(" y ", t.fg(t.pass).add_modifier(Modifier::BOLD).bg(t.sel)),
-                    Span::styled(" approve   ", t.text()),
+                    Span::styled(
+                        if w.ask.is_some() {
+                            " allow   "
+                        } else {
+                            " approve   "
+                        },
+                        t.text(),
+                    ),
                     Span::styled(" n ", t.fg(t.fail).add_modifier(Modifier::BOLD).bg(t.sel)),
-                    Span::styled(" reject", t.text()),
+                    Span::styled(if w.ask.is_some() { " deny" } else { " reject" }, t.text()),
                 ]),
                 Line::from(Span::styled(question, t.text())),
             ])

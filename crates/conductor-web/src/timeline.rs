@@ -38,6 +38,8 @@ pub enum Kind {
     Decision,
     /// The agent asked for a tool and was refused, with nobody to ask.
     Refused,
+    /// The agent asked a person for a tool and waited.
+    Asked,
     Other,
 }
 
@@ -279,6 +281,8 @@ pub fn build(run_id: &str, events: &[Event]) -> Timeline {
             Source::Observed => {
                 entry.kind = if what.starts_with("refused: ") {
                     Kind::Refused
+                } else if what.starts_with("asked: ") {
+                    Kind::Asked
                 } else {
                     Kind::Action
                 };
