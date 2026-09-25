@@ -171,6 +171,15 @@ fn a_run_retries_fresh_after_failing_tests_and_passes_with_a_verifiable_receipt(
     assert!(v.ok(), "{v:?}");
     assert_eq!(v.verdict, Some(Verdict::Passed));
 
+    // Each attempt's diff is kept, so a person can see try 1 next to try 2.
+    let try1 = fs::read_to_string(out.dir.attempt_diff("implement", 1)).unwrap();
+    let try2 = fs::read_to_string(out.dir.attempt_diff("implement", 2)).unwrap();
+    assert!(
+        try1.contains("+pub fn clamp(x: i32) -> i32 { x }"),
+        "{try1}"
+    );
+    assert!(try2.contains("if x > 10"), "{try2}");
+
     // The user's checkout is untouched: the work is on the run's branch.
     let lib = fs::read_to_string(d.path().join("src/lib.rs")).unwrap();
     assert!(lib.contains("todo!()"));

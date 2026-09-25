@@ -477,8 +477,13 @@ pub fn init(repo: &Path) -> Result<ExitCode> {
         println!("  wrote    {rel}");
     }
     let ignore = repo.join(".gitignore");
+    // What the checks themselves write must be ignored, or the next attempt's scope check
+    // sees it as the agent's: cargo's target/ stopped two tries of one run before this.
     let mut wanted = vec!["/.conductor/runs/"];
-    wanted.extend(stack.as_ref().map(|s| s.ignore.clone()).unwrap_or_default());
+    match &stack {
+        Some(s) => wanted.extend(s.ignore.clone()),
+        None => wanted.push("/target/"),
+    }
     for line in wanted {
         let current = std::fs::read_to_string(&ignore).unwrap_or_default();
         let bare = line.trim_matches('/');
@@ -495,7 +500,7 @@ pub fn init(repo: &Path) -> Result<ExitCode> {
         if bare == ".conductor/runs" {
             println!("  updated  .gitignore: run records stay out of git");
         } else {
-            println!("  updated  .gitignore: {bare}, the test report, stays out of git");
+            println!("  updated  .gitignore: {bare}, which the checks write, stays out of git");
         }
     }
     if let Some(s) = &stack {

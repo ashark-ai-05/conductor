@@ -23,6 +23,7 @@ conductor-checks = { path = "crates/conductor-checks" }
 conductor-engine = { path = "crates/conductor-engine" }
 conductor-herdr = { path = "crates/conductor-herdr" }
 conductor-tui = { path = "crates/conductor-tui" }
+conductor-web = { path = "crates/conductor-web" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -47,6 +48,7 @@ conductor-engine.workspace = true
 conductor-herdr.workspace = true
 conductor-model.workspace = true
 conductor-tui.workspace = true
+conductor-web.workspace = true
 serde_json.workspace = true
 
 [lints]

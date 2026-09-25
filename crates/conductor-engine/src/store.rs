@@ -51,6 +51,13 @@ impl RunDir {
         self.root.join("gates.json")
     }
 
+    /// What one attempt changed, as a patch: `attempts/<stage>-<attempt>.patch`.
+    pub fn attempt_diff(&self, stage: &str, attempt: usize) -> PathBuf {
+        self.root
+            .join("attempts")
+            .join(format!("{stage}-{attempt}.patch"))
+    }
+
     pub fn scratch(&self, stage: &str, attempt: usize) -> PathBuf {
         self.root.join("scratch").join(format!("{stage}-{attempt}"))
     }

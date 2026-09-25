@@ -1,0 +1,19 @@
+[package]
+name = "conductor-web"
+version.workspace = true
+edition.workspace = true
+description = "conductor serve: the run record in a browser"
+publish = false
+
+[dependencies]
+conductor-model.workspace = true
+conductor-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tiny_http = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
