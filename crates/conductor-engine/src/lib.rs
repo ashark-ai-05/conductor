@@ -16,6 +16,7 @@ pub mod local_panes;
 pub mod metrics;
 pub mod otlp;
 pub mod receipt;
+pub mod review;
 pub mod store;
 pub mod trace;
 pub mod transcript;

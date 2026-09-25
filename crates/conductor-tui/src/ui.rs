@@ -293,6 +293,13 @@ fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
 fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let run = &app.live;
+    // Waiting on a decision: one screen with what the decision needs, and the decision.
+    if let (Some(w), Some(r)) = (&run.waiting, &app.review)
+        && w.ask.is_none()
+    {
+        review_screen(f, area, app, t, r);
+        return;
+    }
     let done = app.live_done();
     let [head, _, pipe, _, ready, wait, cols, _, panes, _] = Layout::vertical([
         Constraint::Length(1),
@@ -390,6 +397,26 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
     // The run is paused for a person: what they are asked, and the keys that answer.
     if let Some(w) = &run.waiting {
+        waiting_box(f, wait, app, t, w);
+    }
+
+    let [checks, log] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)])
+        .spacing(2)
+        .areas(cols);
+    live_columns(f, checks, log, run, t);
+    live_panes(f, panes, run, t);
+}
+
+/// The box a person answers from: who is waited for, what is asked, the keys, and the note
+/// being typed when there is one.
+fn waiting_box(
+    f: &mut Frame,
+    wait: Rect,
+    app: &App,
+    t: &Theme,
+    w: &conductor_model::view::Waiting,
+) {
+    {
         let question: String = w.question.split_whitespace().collect::<Vec<_>>().join(" ");
         f.render_widget(
             Paragraph::new(
@@ -434,10 +461,15 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             wait,
         );
     }
+}
 
-    let [checks, log] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)])
-        .spacing(2)
-        .areas(cols);
+fn live_columns(
+    f: &mut Frame,
+    checks: Rect,
+    log: Rect,
+    run: &conductor_model::view::LiveRun,
+    t: &Theme,
+) {
     let mut lines: Vec<Line> = run
         .checks
         .iter()
@@ -489,7 +521,9 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Paragraph::new(log_lines).block(block(t, "evidence", "latest", false)),
         log,
     );
+}
 
+fn live_panes(f: &mut Frame, panes: Rect, run: &conductor_model::view::LiveRun, t: &Theme) {
     let mut pane_spans = vec![];
     for p in &run.panes {
         let (word, style) = if p.open {
@@ -517,6 +551,175 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         .block(block(t, &title, "", false)),
         panes,
     );
+}
+
+// ── review: one screen to decide from ───────────────────────────────────────
+
+/// The run paused for a decision: the ticket's intent, what changed, what the checks say
+/// before and after, what it cost, then the decision. Nothing else; the log, the diff and
+/// the receipt stay a key away.
+fn review_screen(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    t: &Theme,
+    r: &conductor_model::view::Review,
+) {
+    let Some(w) = &app.live.waiting else { return };
+    // A box shows one blank row above its rows, so each gets rows + 3.
+    let n_criteria = r.criteria.len().max(1) as u16;
+    let n_files = r.change.files.len().min(4) as u16 + u16::from(r.change.files.len() > 4);
+    let n_checks = r
+        .evidence
+        .iter()
+        .map(|e| 1 + e.lines.len().min(4) as u16)
+        .sum::<u16>()
+        .max(1);
+    let [head, _, asks, _, changed, _, checks, _, cost, _, wait, _] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(n_criteria + 3),
+        Constraint::Length(1),
+        Constraint::Length(1 + n_files + 3),
+        Constraint::Length(1),
+        Constraint::Length(n_checks + 3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(if app.deciding.is_some() { 6 } else { 5 }),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!(" decide: {} ", r.title), t.bold().bg(t.sel)),
+            Span::styled(format!("  {} · waiting for {}", r.run_id, r.who), t.dim()),
+        ])),
+        head,
+    );
+
+    let asks_lines: Vec<Line> = if r.criteria.is_empty() {
+        vec![Line::from(Span::styled(
+            "the ticket lists no acceptance criteria",
+            t.dim(),
+        ))]
+    } else {
+        r.criteria
+            .iter()
+            .map(|c| {
+                Line::from(vec![
+                    Span::styled("• ", t.faint()),
+                    Span::styled(c.clone(), t.text()),
+                ])
+            })
+            .collect()
+    };
+    f.render_widget(
+        Paragraph::new(asks_lines)
+            .wrap(Wrap { trim: true })
+            .block(block(t, "the ticket asks", "", false)),
+        asks,
+    );
+
+    let c = &r.change;
+    let mut change_lines = vec![Line::from(vec![
+        Span::styled(format!("+{} ", c.added), t.fg(t.pass)),
+        Span::styled(format!("−{} ", c.removed), t.fg(t.fail)),
+        Span::styled(
+            format!(
+                "in {} file{} · branch {}",
+                c.files.len(),
+                if c.files.len() == 1 { "" } else { "s" },
+                c.branch
+            ),
+            t.dim(),
+        ),
+    ])];
+    for f_ in c.files.iter().take(4) {
+        change_lines.push(Line::from(Span::styled(format!("  {f_}"), t.text())));
+    }
+    if c.files.len() > 4 {
+        change_lines.push(Line::from(Span::styled(
+            format!("  +{} more", c.files.len() - 4),
+            t.faint(),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(change_lines).block(block(
+            t,
+            "what changed",
+            "the diff is on the branch",
+            false,
+        )),
+        changed,
+    );
+
+    let mut check_lines: Vec<Line> = Vec::new();
+    for e in &r.evidence {
+        let mut spans = vec![Span::styled(
+            format!("{}  ", e.after.glyph()),
+            t.verdict(e.after),
+        )];
+        if let Some(b) = e.before {
+            spans.push(Span::styled(
+                format!("{} before → {} after   ", b.word(), e.after.word()),
+                if b != e.after { t.bold() } else { t.dim() },
+            ));
+        }
+        let what = if e.claim.is_empty() {
+            e.check.clone()
+        } else {
+            e.claim.clone()
+        };
+        spans.push(Span::styled(what, t.text()));
+        check_lines.push(Line::from(spans));
+        for l in e.lines.iter().take(4) {
+            let style = if l.starts_with("FAIL") || l.starts_with('✗') {
+                t.fg(t.fail)
+            } else {
+                t.dim()
+            };
+            check_lines.push(Line::from(Span::styled(format!("      {l}"), style)));
+        }
+    }
+    if check_lines.is_empty() {
+        check_lines.push(Line::from(Span::styled("no check ran", t.dim())));
+    }
+    f.render_widget(
+        Paragraph::new(check_lines)
+            .wrap(Wrap { trim: false })
+            .block(block(
+                t,
+                "what the checks say",
+                "run by conductor, before the fix and after",
+                false,
+            )),
+        checks,
+    );
+
+    let k = &r.cost;
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" cost ", t.bold().bg(t.sel)),
+            Span::styled(
+                format!(
+                    "  {} tr{} · {} tokens · ${:.2} · waited on people {}s · {}m{:02}s so far",
+                    k.tries,
+                    if k.tries == 1 { "y" } else { "ies" },
+                    k.tokens,
+                    k.cost_usd,
+                    k.waited_s,
+                    k.wall_s / 60,
+                    k.wall_s % 60
+                ),
+                t.text(),
+            ),
+        ])),
+        cost,
+    );
+
+    waiting_box(f, wait, app, t, w);
 }
 
 // ── receipt ─────────────────────────────────────────────────────────────────
@@ -829,6 +1032,7 @@ fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 mod tests {
     use super::*;
     use crate::app::App;
+    use conductor_model::view::LiveRun;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -900,6 +1104,93 @@ mod tests {
             s.contains("+ 1 run that never reached a check · conductor receipt HALT1"),
             "{s}"
         );
+    }
+
+    struct Reviewed(LiveRun, conductor_model::view::Review);
+    impl crate::app::RunSource for Reviewed {
+        fn receipts(&self) -> Vec<conductor_model::Receipt> {
+            vec![]
+        }
+        fn running(&self) -> Vec<LiveRun> {
+            vec![self.0.clone()]
+        }
+        fn live(&self, _id: &str) -> Option<LiveRun> {
+            Some(self.0.clone())
+        }
+        fn review(&self, _id: &str) -> Option<conductor_model::view::Review> {
+            Some(self.1.clone())
+        }
+    }
+
+    #[test]
+    fn a_run_waiting_on_a_decision_shows_the_five_things_and_the_decision() {
+        use conductor_model::view::*;
+        let mut l = conductor_model::demo::live();
+        l.run_id = "R9".into();
+        l.waiting = Some(Waiting {
+            stage: "review".into(),
+            who: "PO".into(),
+            question: "Approve only if every criterion is shown.".into(),
+            since: "2026-09-26T00:00:00Z".into(),
+            ask: None,
+        });
+        let review = Review {
+            run_id: "R9".into(),
+            stage: "review".into(),
+            who: "PO".into(),
+            title: "BUG-101: Balance request fails".into(),
+            criteria: vec![
+                "AC1: `GET /accounts/ACC-1/balance` returns 200".into(),
+                "AC2: ACC-2 returns 0.00".into(),
+            ],
+            change: Change {
+                files: vec!["src/main/java/LedgerService.java".into()],
+                added: 2,
+                removed: 2,
+                branch: "conductor/R9".into(),
+            },
+            evidence: vec![EvidenceRow {
+                stage: "fix".into(),
+                check: "command_assert".into(),
+                claim: "`./scripts/deploy-and-test.sh` succeeds".into(),
+                before: Some(Verdict::Failed),
+                after: Verdict::Passed,
+                detail: "exited 0".into(),
+                lines: vec![
+                    "PASS AC1: GET /accounts/ACC-1/balance -> HTTP 200".into(),
+                    "PASS AC2: ...".into(),
+                ],
+            }],
+            cost: Cost {
+                tries: 1,
+                tokens: 394573,
+                cost_usd: 1.14,
+                waited_s: 26,
+                wall_s: 126,
+            },
+        };
+        let mut app = App::from_source(Box::new(Reviewed(l, review)));
+        app.go(Screen::Live);
+        app.tick();
+        let s = render(&app, 140, 45);
+        for want in [
+            "decide: BUG-101: Balance request fails",
+            "the ticket asks",
+            "AC2: ACC-2 returns 0.00",
+            "what changed",
+            "+2 −2 in 1 file",
+            "src/main/java/LedgerService.java",
+            "what the checks say",
+            "failed before → passed after",
+            "PASS AC1",
+            "1 try · 394573 tokens · $1.14 · waited on people 26s · 2m06s so far",
+            "waiting for PO",
+            "approve",
+        ] {
+            assert!(s.contains(want), "missing {want:?}\n{s}");
+        }
+        // The working view's columns are not on this screen.
+        assert!(!s.contains("conductor opens a pane per stage"), "{s}");
     }
 
     #[test]

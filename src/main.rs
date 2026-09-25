@@ -753,6 +753,9 @@ impl conductor_tui::app::RunSource for RepoRuns {
         )
         .map_err(|e| e.to_string())
     }
+    fn review(&self, run_id: &str) -> Option<conductor_model::view::Review> {
+        conductor_engine::review::read(&self.0, run_id)
+    }
     fn answer(&self, run_id: &str, ask: u32, allowed: bool) -> Result<(), String> {
         let who = conductor_engine::live::read(&self.0, run_id)
             .and_then(|l| l.waiting)

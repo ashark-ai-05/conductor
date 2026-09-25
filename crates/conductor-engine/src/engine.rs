@@ -928,6 +928,42 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 .timeout_ms
                 .map(Duration::from_millis)
                 .unwrap_or(HUMAN_WAIT);
+            // What the person needs to decide, on one screen, from the record so far. The
+            // intent is the ticket when the run was given one, else the task text.
+            let who = stage.agent.who.clone().unwrap_or_else(|| "someone".into());
+            let intent = opts
+                .spec_path
+                .as_deref()
+                .and_then(|p| std::fs::read_to_string(wt.join(p)).ok())
+                .unwrap_or_else(|| opts.task.clone());
+            let review = crate::review::build(
+                &dir,
+                &run_id,
+                &stage.id,
+                &who,
+                &intent,
+                &records,
+                &branch,
+                started.elapsed(),
+            );
+            match crate::review::write(&dir, &review) {
+                Ok(()) => rec.record(
+                    Source::Witnessed,
+                    Some(&stage.id),
+                    format!(
+                        "review written: {} criteria, {} file(s) changed, {} check(s), ${:.2}",
+                        review.criteria.len(),
+                        review.change.files.len(),
+                        review.evidence.len(),
+                        review.cost.cost_usd
+                    ),
+                )?,
+                Err(e) => rec.record(
+                    Source::Witnessed,
+                    Some(&stage.id),
+                    format!("review could not be written: {e}"),
+                )?,
+            };
             // The decision is about the ticket, so it goes there unless the stage says
             // where else.
             stage_verdict = human_stage(
@@ -995,6 +1031,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     ),
                 )?;
             }
+            stage_rec.before = before.clone();
             live.save(&rec);
             // The ticket as it is at the stage's base (the tree is at the base here, and the
             // checks above don't write it), and what conductor has appended to it since:
@@ -1156,6 +1193,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     })
                 };
                 record_agent(&mut rec, &stage.id, &agent, seen_live > 0)?;
+                stage_rec.waited_ms += agent.waited_ms;
                 if agent.asked > 0 {
                     waited_total += Duration::from_millis(agent.waited_ms);
                     stage_rec.note(&format!(
