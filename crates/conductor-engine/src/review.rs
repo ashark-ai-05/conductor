@@ -153,7 +153,11 @@ pub fn cost(records: &[StageRecord], wall: Duration) -> Cost {
     Cost {
         tries: records.iter().map(|s| s.attempts).sum(),
         tokens: records.iter().filter_map(|s| s.tokens).sum(),
-        cost_usd: records.iter().filter_map(|s| s.cost_usd).sum(),
+        // A fold from +0.0: an empty sum of floats is -0.0, which prints as "$-0.00".
+        cost_usd: records
+            .iter()
+            .filter_map(|s| s.cost_usd)
+            .fold(0.0, |a, b| a + b),
         waited_s: records.iter().map(|s| s.waited_ms).sum::<u64>() / 1000,
         wall_s: wall.as_secs(),
     }
@@ -286,5 +290,6 @@ mod tests {
         let c = cost(std::slice::from_ref(&s), Duration::from_secs(90));
         assert_eq!((c.tries, c.tokens, c.waited_s, c.wall_s), (2, 10, 4, 90));
         assert!((c.cost_usd - 1.5).abs() < 1e-9);
+        assert!(!cost(&[], Duration::ZERO).cost_usd.is_sign_negative());
     }
 }
