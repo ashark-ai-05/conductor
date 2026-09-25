@@ -1121,6 +1121,13 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                                 }));
                                 (Source::Observed, format!("asked: {}", a.describe()))
                             }
+                            executor::Observed::Blocked { why } => {
+                                live.view.note = Some(why.clone());
+                                (
+                                    Source::Inferred,
+                                    format!("the agent is waiting for a person in its pane: {why}"),
+                                )
+                            }
                             executor::Observed::Answered { ask, answer, waited } => {
                                 live.waiting(None);
                                 let note = if answer.note.trim().is_empty() {
@@ -1155,6 +1162,12 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                         "the agent asked for {} tool(s), {} denied, and waited {}s for an answer; that time is not counted against the stage",
                         agent.asked,
                         agent.denied,
+                        agent.waited_ms / 1000
+                    ));
+                } else if agent.waited_ms > 0 {
+                    waited_total += Duration::from_millis(agent.waited_ms);
+                    stage_rec.note(&format!(
+                        "the agent waited {}s for a person at its pane; that time is not counted against the stage",
                         agent.waited_ms / 1000
                     ));
                 }
