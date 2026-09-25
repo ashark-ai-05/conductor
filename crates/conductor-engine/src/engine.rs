@@ -556,16 +556,28 @@ fn feedback(r: &GateResult) -> String {
     f
 }
 
-fn record_agent(rec: &mut Recorder, stage: &str, a: &AgentRun) -> std::io::Result<()> {
+fn describe(c: &executor::ToolCall) -> String {
+    match &c.target {
+        Some(t) => format!("{} {t}", c.tool),
+        None => c.tool.clone(),
+    }
+}
+
+/// Records what the agent reported once done. Tool calls already recorded as they happened
+/// are not recorded again.
+fn record_agent(
+    rec: &mut Recorder,
+    stage: &str,
+    a: &AgentRun,
+    seen_live: bool,
+) -> std::io::Result<()> {
     for n in &a.inferred {
         rec.record(Source::Inferred, Some(stage), n)?;
     }
-    for c in &a.tool_calls {
-        let what = match &c.target {
-            Some(t) => format!("{} {t}", c.tool),
-            None => c.tool.clone(),
-        };
-        rec.record(Source::Observed, Some(stage), what)?;
+    if !seen_live {
+        for c in &a.tool_calls {
+            rec.record(Source::Observed, Some(stage), describe(c))?;
+        }
     }
     match &a.usage {
         Some(u) => {
@@ -892,8 +904,36 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                         _ => Vec::new(),
                     },
                 };
-                let agent = exec.run(&brief);
-                record_agent(&mut rec, &stage.id, &agent)?;
+                // What the agent does is recorded as it happens, so a person watching can
+                // tell working from stuck, and a refusal shows the moment it lands.
+                let mut seen_live = 0usize;
+                let agent = {
+                    let (rec, live) = (&mut rec, &mut live);
+                    let stage_id = stage.id.as_str();
+                    exec.run(&brief, &mut |o| {
+                        seen_live += 1;
+                        let what = match &o {
+                            executor::Observed::Tool(c) => describe(c),
+                            executor::Observed::Refused { call, why } => {
+                                live.view.note = Some(format!(
+                                    "the agent asked to run `{}` and was refused; headless, nobody can approve it",
+                                    call.target.as_deref().unwrap_or(&call.tool)
+                                ));
+                                format!("refused: {} ({why})", describe(call))
+                            }
+                        };
+                        if rec.record(Source::Observed, Some(stage_id), what).is_ok() {
+                            live.save(rec);
+                        }
+                    })
+                };
+                record_agent(&mut rec, &stage.id, &agent, seen_live > 0)?;
+                if !agent.refused.is_empty() {
+                    stage_rec.note(&format!(
+                        "{} tool call(s) refused: the agent asked and nobody could approve; widen allowed_tools",
+                        agent.refused.len()
+                    ));
+                }
                 if let Some(path) = &actions_path {
                     let actions = agent_panes::read_actions(path);
                     for a in actions.iter().skip(actions_seen) {

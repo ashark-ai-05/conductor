@@ -620,6 +620,25 @@ impl conductor_tui::app::RunSource for RepoRuns {
     fn stats(&self) -> Option<[(String, String); 3]> {
         conductor_engine::metrics::headline_stats(&self.0)
     }
+    fn decide(&self, run_id: &str, stage: &str, approved: bool) -> Result<(), String> {
+        let who = conductor_engine::live::read(&self.0, run_id)
+            .and_then(|l| l.waiting)
+            .map(|w| w.who)
+            .or_else(|| std::env::var("USER").ok())
+            .unwrap_or_else(|| "someone".into());
+        let d = conductor_engine::decision::Decision {
+            approved,
+            by: who,
+            note: "from the terminal UI".into(),
+            at: conductor_engine::store::now(),
+        };
+        conductor_engine::decision::write(
+            &conductor_engine::store::RunDir::for_run(&self.0, run_id),
+            stage,
+            &d,
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 fn ui(args: &[String]) -> Result<ExitCode> {

@@ -165,7 +165,8 @@ async function runPage(main, id) {
       kv(s.running ? clock(Date.now() - Date.parse(s.started_at)).slice(1) : dur(s.duration_s), s.running ? "elapsed" : "wall clock"),
       kv(String(d.timeline.attempts.length), "attempts"), kv(String(d.timeline.catches), "caught by a check"),
       d.receipt ? kv(`${s.checks_passed} of ${s.checks}`, "checks passed") : null,
-      h("div", { class: "story" }, story(d)));
+      h("div", { class: "story" }, story(d)),
+      d.live && d.live.note && s.running ? h("div", { class: "story", style: "color:var(--warn)" }, d.live.note) : null);
   }
   const kv = (v, l) => h("span", { class: "kv" }, h("b", {}, v), h("span", {}, l));
 
@@ -222,6 +223,7 @@ async function runPage(main, id) {
       const key = e.stage && e.attempt ? `${e.stage}-${e.attempt}` : null;
       if (key && key !== lastBandKey && bands.has(key)) { flush(); currentBand = bands.get(key); lastBandKey = key; frag.append(bandEl(currentBand, cursor)); }
       if (e.kind === "action") { pendingActions.push(e); continue; }
+      if (e.kind === "refused") { flush(); frag.append(row(e)); continue; }
       flush();
       frag.append(row(e));
     }
@@ -279,6 +281,7 @@ async function runPage(main, id) {
     if (e.kind === "usage") return [h("b", {}, "measured "), e.text];
     if (e.kind === "inferred") return ["inferred: ", e.text];
     if (e.kind === "decision") return [h("b", {}, "decided "), e.text];
+    if (e.kind === "refused") return [h("b", {}, "refused "), e.text.replace(/^refused: /, ""), h("div", { class: "notes", style: "font-size:12px" }, "nobody can approve this in a headless run")];
     return [e.text];
   }
   function legend() {

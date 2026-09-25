@@ -36,6 +36,8 @@ pub enum Kind {
     Inferred,
     /// A person decided.
     Decision,
+    /// The agent asked for a tool and was refused, with nobody to ask.
+    Refused,
     Other,
 }
 
@@ -275,7 +277,11 @@ pub fn build(run_id: &str, events: &[Event]) -> Timeline {
                 }
             }
             Source::Observed => {
-                entry.kind = Kind::Action;
+                entry.kind = if what.starts_with("refused: ") {
+                    Kind::Refused
+                } else {
+                    Kind::Action
+                };
                 let text = shorten(what, run_id);
                 let (tool, _) = text.split_once(' ').unwrap_or((&text, ""));
                 entry.tool = Some(tool.to_owned());

@@ -21,7 +21,10 @@ stages:
   - id: fix
     agent:
       kind: claude
-      allowed_tools: ["Bash(mvn:*)", "Bash(./scripts/deploy-and-test.sh)", "Bash(curl:*)"]
+      # Headless, a command outside this list is refused and nobody can approve it: the
+      # first real run spent eight minutes being refused `ls`. This checkout is disposable,
+      # so let the agent run what it needs.
+      allowed_tools: ["Bash"]
     prompt_file: .conductor/prompts/fix.md
     scope: { write: ["src/main/**"] }
     # As it happens, into the ticket: each check with its output, then the service's log.

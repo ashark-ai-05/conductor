@@ -89,8 +89,13 @@ decision is the stage's check on the receipt:
 `evidence` appends every check's command, verdict and output, plus the files named, to
 the ticket the run was given (`--spec tickets/BUG-101.md`), while the stage runs, so there
 is nothing to collect afterwards. The decision lands there too. Decide from the run's
-page in `conductor serve`, or with `conductor approve <run> --by PO -m "…"` and
-`conductor reject`.
+page in `conductor serve`, with `y` / `n` in `conductor ui`, or with
+`conductor approve <run> --by PO -m "…"` and `conductor reject`.
+
+What the agent does is on the record as it happens, so a person watching can tell working
+from stuck. A tool the agent asks for and is refused (it is outside `allowed_tools`, and
+headless nobody can approve it) shows the moment it happens, on the page and in the
+receipt's notes.
 
 `examples/sdlc-mock/` is a Spring Boot service with one real bug, a ticket, a local
 deploy and a log: the team's loop, small enough to run end to end in a minute. Its README

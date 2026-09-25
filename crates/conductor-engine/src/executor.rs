@@ -62,11 +62,25 @@ pub struct AgentRun {
     pub duration_ms: u64,
     /// herdr's readings (pane opened, agent idle, waiting for you): recorded as `inferred`.
     pub inferred: Vec<String>,
+    /// Tools the agent asked for and was refused.
+    pub refused: Vec<ToolCall>,
+}
+
+/// Something seen while the agent works, handed over as it happens.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Observed {
+    /// A tool the agent used.
+    Tool(ToolCall),
+    /// A tool the agent asked for and was refused: in a headless run nobody can approve it,
+    /// so the agent is on its own.
+    Refused { call: ToolCall, why: String },
 }
 
 pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
-    fn run(&self, brief: &Brief) -> AgentRun;
+    /// Runs the agent to the end of its turn. `observe` is called with each thing seen on
+    /// the way, from the calling thread, before `run` returns.
+    fn run(&self, brief: &Brief, observe: &mut dyn FnMut(Observed)) -> AgentRun;
 }
 
 /// Picks the executor for an agent kind. Only headless executors exist so far; the herdr
@@ -74,7 +88,9 @@ pub trait Executor: Send + Sync {
 pub fn for_agent(kind: &str) -> Result<Box<dyn Executor>, String> {
     match kind {
         "script" => Ok(Box::new(Script)),
-        "claude" => Ok(Box::new(ClaudeHeadless::default())),
+        "claude" => Ok(Box::new(ClaudeHeadless {
+            program: std::env::var("CONDUCTOR_CLAUDE_BIN").ok(),
+        })),
         other => Err(format!(
             "no executor for agent kind `{other}` yet; available: claude, script"
         )),
@@ -90,7 +106,7 @@ impl Executor for Script {
         "script"
     }
 
-    fn run(&self, b: &Brief) -> AgentRun {
+    fn run(&self, b: &Brief, _observe: &mut dyn FnMut(Observed)) -> AgentRun {
         let mut env = vec![
             ("CONDUCTOR_PROMPT".to_string(), b.prompt.clone()),
             ("CONDUCTOR_STAGE".to_string(), b.stage.clone()),
@@ -164,18 +180,23 @@ impl Executor for ClaudeHeadless {
         "headless"
     }
 
-    fn run(&self, b: &Brief) -> AgentRun {
+    fn run(&self, b: &Brief, observe: &mut dyn FnMut(Observed)) -> AgentRun {
         let argv = self.argv(b);
-        let e = runner::run(&runner::Spec {
-            argv: &argv,
-            cwd: &b.cwd,
-            timeout: b.timeout,
-            pass_env: &[],
-            run_id: &b.run_id,
-            inherit_env: true,
-            set_env: &b.env,
-        });
-        let mut run = parse_claude_stream(&e.stdout_text());
+        let mut run = AgentRun::default();
+        let mut stream = Stream::default();
+        let e = runner::run_streaming(
+            &runner::Spec {
+                argv: &argv,
+                cwd: &b.cwd,
+                timeout: b.timeout,
+                pass_env: &[],
+                run_id: &b.run_id,
+                inherit_env: true,
+                set_env: &b.env,
+            },
+            &mut |line| stream.feed(line, &mut run, observe),
+        );
+        stream.finish(&mut run);
         run.duration_ms = e.duration_ms;
         if e.ended != Ended::Exited {
             run.finished = false;
@@ -191,13 +212,18 @@ impl Executor for ClaudeHeadless {
     }
 }
 
-/// Reads Claude Code's `stream-json` output: one JSON object per line.
-pub fn parse_claude_stream(text: &str) -> AgentRun {
-    let mut run = AgentRun::default();
-    let mut saw_result = false;
-    for line in text.lines() {
+/// Reads Claude Code's `stream-json` output, one JSON object per line, as it arrives.
+#[derive(Default)]
+struct Stream {
+    saw_result: bool,
+    /// Tool calls by id, so a refusal can be tied to what was asked.
+    calls: std::collections::HashMap<String, ToolCall>,
+}
+
+impl Stream {
+    fn feed(&mut self, line: &str, run: &mut AgentRun, observe: &mut dyn FnMut(Observed)) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
+            return;
         };
         match v.get("type").and_then(|t| t.as_str()) {
             Some("system") if v.get("subtype").and_then(|s| s.as_str()) == Some("init") => {
@@ -225,12 +251,57 @@ pub fn parse_claude_stream(text: &str) -> AgentRun {
                             .iter()
                             .find_map(|k| input.and_then(|i| i.get(*k)).and_then(|x| x.as_str()))
                             .map(str::to_owned);
-                        run.tool_calls.push(ToolCall { tool, target });
+                        let call = ToolCall { tool, target };
+                        if let Some(id) = c.get("id").and_then(|i| i.as_str()) {
+                            self.calls.insert(id.to_owned(), call.clone());
+                        }
+                        run.tool_calls.push(call.clone());
+                        observe(Observed::Tool(call));
                     }
                 }
             }
+            // A refused tool comes back as an error result: Claude's permission system said
+            // no, and in a headless run there is nobody to say yes.
+            Some("user") => {
+                for c in v
+                    .pointer("/message/content")
+                    .and_then(|c| c.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    if c.get("type").and_then(|t| t.as_str()) != Some("tool_result")
+                        || c.get("is_error").and_then(|b| b.as_bool()) != Some(true)
+                    {
+                        continue;
+                    }
+                    let text = c
+                        .get("content")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    let refused = text.contains("requires approval")
+                        || text.contains("permission")
+                        || text.contains("not allowed");
+                    if !refused {
+                        continue;
+                    }
+                    let call = c
+                        .get("tool_use_id")
+                        .and_then(|i| i.as_str())
+                        .and_then(|i| self.calls.get(i).cloned())
+                        .unwrap_or(ToolCall {
+                            tool: "?".into(),
+                            target: None,
+                        });
+                    run.refused.push(call.clone());
+                    observe(Observed::Refused {
+                        call,
+                        why: text.lines().next().unwrap_or("").to_owned(),
+                    });
+                }
+            }
             Some("result") => {
-                saw_result = true;
+                self.saw_result = true;
                 let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(true);
                 let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
                 run.finished = !is_error && subtype == "success";
@@ -260,17 +331,31 @@ pub fn parse_claude_stream(text: &str) -> AgentRun {
             _ => {}
         }
     }
-    if !saw_result {
-        run.finished = false;
-        run.reason
-            .get_or_insert_with(|| "claude produced no result".into());
+
+    fn finish(&self, run: &mut AgentRun) {
+        if !self.saw_result {
+            run.finished = false;
+            run.reason
+                .get_or_insert_with(|| "claude produced no result".into());
+        }
     }
+}
+
+/// Reads a whole `stream-json` transcript at once.
+pub fn parse_claude_stream(text: &str) -> AgentRun {
+    let mut run = AgentRun::default();
+    let mut st = Stream::default();
+    for line in text.lines() {
+        st.feed(line, &mut run, &mut |_| {});
+    }
+    st.finish(&mut run);
     run
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     const STREAM: &str = include_str!("../tests/fixtures/claude-stream.jsonl");
 
@@ -292,6 +377,74 @@ mod tests {
         assert_eq!(u.output_tokens, 89);
         assert!(u.total() > 70_000);
         assert!(u.cost_usd.unwrap() > 0.0);
+    }
+
+    const REFUSED: &str = include_str!("../tests/fixtures/claude-stream-refused.jsonl");
+
+    #[test]
+    fn a_refused_tool_is_seen_and_tied_to_what_was_asked() {
+        let r = parse_claude_stream(REFUSED);
+        assert!(r.finished);
+        assert_eq!(r.tool_calls.len(), 3);
+        assert_eq!(
+            r.refused,
+            vec![ToolCall {
+                tool: "Bash".into(),
+                target: Some("mvn -v && ls /opt/homebrew/opt".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn observations_arrive_while_claude_runs() {
+        // A stand-in claude: the transcript's first lines, a pause, then the rest.
+        let d = tempfile::tempdir().unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/claude-stream-refused.jsonl");
+        let fake = d.path().join("claude");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\nhead -n 2 {f}\nsleep 1\ntail -n +3 {f}\n",
+                f = fixture.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let exec = ClaudeHeadless {
+            program: Some(fake.display().to_string()),
+        };
+        let brief = Brief {
+            stage: "fix".into(),
+            prompt: "fix it".into(),
+            cwd: d.path().to_path_buf(),
+            agent: Agent {
+                kind: "claude".into(),
+                command: vec![],
+                model: None,
+                permission_mode: PermissionMode::AcceptEdits,
+                allowed_tools: vec![],
+                who: None,
+            },
+            resume: None,
+            timeout: Duration::from_secs(20),
+            run_id: "r".into(),
+            attempt: 1,
+            env: vec![],
+        };
+        let started = Instant::now();
+        let mut seen: Vec<(Observed, Duration)> = Vec::new();
+        let run = exec.run(&brief, &mut |o| seen.push((o, started.elapsed())));
+        assert!(run.finished, "{:?}", run.reason);
+        assert_eq!(seen.len(), 4, "{seen:?}");
+        // The first tool call was seen before the pause ended.
+        assert!(matches!(seen[0].0, Observed::Tool(_)));
+        assert!(seen[0].1 < Duration::from_millis(900), "{:?}", seen[0].1);
+        assert!(seen[3].1 >= Duration::from_millis(900), "{:?}", seen[3].1);
+        assert!(
+            matches!(&seen[2].0, Observed::Refused { why, .. } if why.contains("requires approval"))
+        );
     }
 
     #[test]

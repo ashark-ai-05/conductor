@@ -59,6 +59,10 @@ pub trait RunSource {
     fn stats(&self) -> Option<[(String, String); 3]> {
         None
     }
+    /// Records a person's decision on a `human` stage the run is waiting for.
+    fn decide(&self, _run_id: &str, _stage: &str, _approved: bool) -> Result<(), String> {
+        Err("deciding is not available here".into())
+    }
 }
 
 pub struct App {
@@ -401,6 +405,18 @@ impl App {
             }
             KeyCode::Char('p') if self.demo => {
                 self.status = Some("paused — p again to resume (demo)".into())
+            }
+            KeyCode::Char(c @ ('y' | 'n')) if self.live.waiting.is_some() => {
+                let approved = c == 'y';
+                let w = self.live.waiting.clone().unwrap();
+                let word = if approved { "approved" } else { "rejected" };
+                self.status = Some(match &self.source {
+                    Some(src) => match src.decide(&self.live.run_id, &w.stage, approved) {
+                        Ok(()) => format!("{}: {word} as {}; the run continues", w.stage, w.who),
+                        Err(e) => format!("not recorded: {e}"),
+                    },
+                    None => format!("{}: {word} (demo)", w.stage),
+                });
             }
             _ => {}
         }
