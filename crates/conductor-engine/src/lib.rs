@@ -4,6 +4,8 @@
 //! what happens next is a rule over recorded facts.
 
 pub mod agent_panes;
+pub mod ask;
+pub mod decision;
 pub mod deliver;
 pub mod engine;
 pub mod executor;
@@ -127,6 +129,20 @@ pub fn read_receipt(repo: &Path, run_id: &str) -> Result<Receipt, String> {
 }
 
 /// Run ids in the repository that have a receipt, newest first.
+/// Every run with a record on disk, finished or not, newest first.
+pub fn list_runs_any(repo: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = std::fs::read_dir(repo.join(".conductor").join("runs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("events.jsonl").is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    ids.sort();
+    ids.reverse();
+    ids
+}
+
 pub fn list_runs(repo: &Path) -> Vec<String> {
     let mut ids: Vec<String> = std::fs::read_dir(repo.join(".conductor").join("runs"))
         .into_iter()

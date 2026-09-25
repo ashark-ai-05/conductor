@@ -105,6 +105,7 @@ fn options(dir: &Path) -> Options {
         workflow: ".conductor/workflows/build.yaml".into(),
         base: "HEAD".into(),
         task: "# Clamp values above 10\n\nclamp(x) returns 10 for anything above 10.".into(),
+        spec_path: None,
         watcher: None,
         home: Some(dir.join(".test-conductor-home")),
         mode: conductor_engine::Mode::Headless,
@@ -543,4 +544,231 @@ fn a_junit_report_is_always_fresh() {
     );
     assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
     assert!(said(&out, "[report reports/TEST-s.xml sha256:"));
+}
+
+/// A `human` stage pauses the run; the decision is its one check and lands in the ticket.
+#[test]
+fn a_human_stage_waits_for_a_decision_and_records_it_as_evidence() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    fs::create_dir_all(p.join(".conductor/workflows")).unwrap();
+    fs::create_dir_all(p.join("tickets")).unwrap();
+    fs::write(
+        p.join(".gitignore"),
+        "/.conductor/runs/\n/.test-conductor-home/\n",
+    )
+    .unwrap();
+    fs::write(
+        p.join("tickets/T-1.md"),
+        "# T-1: say hello\n\nAC1: notes/out.md contains hello\n",
+    )
+    .unwrap();
+    fs::write(
+        p.join(".conductor/workflows/build.yaml"),
+        r#"id: reviewed
+version: 1
+kind: build
+defaults:
+  retries: { max: 0, ladder: [] }
+stages:
+  - id: write
+    agent: { kind: script, command: ["sh", "-c", "mkdir -p notes && echo hello > notes/out.md"] }
+    scope: { write: ["notes/**"] }
+    evidence: { to: "{{spec}}", files: ["notes/out.md"] }
+    gates:
+      - { type: scope }
+      - { type: command_assert, command: ["grep", "-q", "hello", "notes/out.md"], parser: exit }
+  - id: review
+    depends_on: [write]
+    agent: { kind: human, who: QA }
+    prompt_file: .conductor/prompts/review.md
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(p.join(".conductor/prompts")).unwrap();
+    fs::write(
+        p.join(".conductor/prompts/review.md"),
+        "Approve if AC1 is shown.\n",
+    )
+    .unwrap();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "t"]);
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "base"]);
+
+    // Decide from another thread once the run is waiting, the way a person would.
+    let repo = p.to_path_buf();
+    let decider = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        loop {
+            let ids = conductor_engine::list_runs_any(&repo);
+            if let Some(id) = ids.first()
+                && let Some(l) = conductor_engine::live::read(&repo, id)
+                && let Some(w) = l.waiting
+            {
+                assert_eq!(w.who, "QA");
+                assert_eq!(w.question.trim(), "Approve if AC1 is shown.");
+                let dir = conductor_engine::store::RunDir::for_run(&repo, id);
+                conductor_engine::decision::write(
+                    &dir,
+                    &w.stage,
+                    &conductor_engine::decision::Decision {
+                        approved: true,
+                        by: "QA".into(),
+                        note: "AC1 shown".into(),
+                        at: conductor_engine::store::now(),
+                    },
+                )
+                .unwrap();
+                return;
+            }
+            assert!(started.elapsed().as_secs() < 60, "never waited");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+    let mut opts = options(p);
+    opts.spec_path = Some("tickets/T-1.md".into());
+    let out = run(opts).expect("run completes");
+    decider.join().unwrap();
+    assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    let claims: Vec<&str> = out
+        .receipt
+        .checks
+        .iter()
+        .map(|c| c.claim.as_str())
+        .collect();
+    assert!(
+        claims.contains(&"QA approved the work so far (review)"),
+        "{claims:?}"
+    );
+    let ticket = fs::read_to_string(out.worktree.join("tickets/T-1.md")).unwrap();
+    assert!(ticket.contains("## Evidence"), "{ticket}");
+    assert!(ticket.contains("### write · try 1"), "{ticket}");
+    assert!(
+        ticket.contains("`grep -q hello notes/out.md` exited 0"),
+        "{ticket}"
+    );
+    assert!(ticket.contains("**notes/out.md** (1 lines)"), "{ticket}");
+    assert!(
+        ticket.contains("**decision** passed: approved by QA: AC1 shown"),
+        "{ticket}"
+    );
+    // The evidence is committed with the stage, and the scope check allowed it.
+    let events = out.dir.read_events().unwrap();
+    assert!(
+        events.iter().any(|e| e
+            .what
+            .starts_with("evidence: 5 item(s) appended to tickets/T-1.md")),
+        "{events:#?}"
+    );
+    // The check ran at the base first, and failed there: the ticket shows the before.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.what.starts_with("before the fix: command_assert failed")),
+        "{events:#?}"
+    );
+    assert!(events.iter().any(|e| e.what == "QA approved: AC1 shown"));
+    let ticket = git_show(p, "tickets/T-1.md");
+    assert!(ticket.contains("**Before the fix**"), "{ticket}");
+    assert!(ticket.contains("**After the fix**"), "{ticket}");
+    assert!(
+        ticket.contains("- **change**: 1 file(s), +1 −0"),
+        "{ticket}"
+    );
+    assert!(ticket.contains("+hello"), "{ticket}");
+}
+
+/// The ticket on the latest `conductor/*` branch.
+fn git_show(repo: &Path, path: &str) -> String {
+    let branches = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "branch",
+            "--list",
+            "conductor/*",
+            "--format=%(refname:short)",
+        ])
+        .output()
+        .unwrap();
+    let branch = String::from_utf8_lossy(&branches.stdout)
+        .lines()
+        .last()
+        .unwrap()
+        .to_owned();
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["show", &format!("{branch}:{path}")])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Only conductor writes the ticket: an agent that adds its own words to it fails the
+/// attempt, and its words are dropped before the evidence goes in.
+#[test]
+fn an_agent_that_writes_into_the_ticket_is_stopped_and_its_words_dropped() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    fs::create_dir_all(p.join(".conductor/workflows")).unwrap();
+    fs::create_dir_all(p.join("tickets")).unwrap();
+    fs::write(
+        p.join(".gitignore"),
+        "/.conductor/runs/\n/.test-conductor-home/\n",
+    )
+    .unwrap();
+    fs::write(p.join("tickets/T-2.md"), "# T-2: say hello\n").unwrap();
+    fs::write(
+        p.join(".conductor/workflows/build.yaml"),
+        r#"id: tampering
+version: 1
+kind: build
+defaults:
+  retries: { max: 0, ladder: [] }
+stages:
+  - id: write
+    agent: { kind: script, command: ["sh", "-c", "mkdir -p notes && echo hello > notes/out.md && echo 'Root cause: I say so' >> tickets/T-2.md"] }
+    scope: { write: ["notes/**"] }
+    evidence: { to: "{{spec}}" }
+    gates:
+      - { type: scope }
+      - { type: command_assert, command: ["grep", "-q", "hello", "notes/out.md"], parser: exit }
+"#,
+    )
+    .unwrap();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.email", "t@example.com"]);
+    git(p, &["config", "user.name", "t"]);
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "base"]);
+    let mut opts = options(p);
+    opts.spec_path = Some("tickets/T-2.md".into());
+    let out = conductor_engine::run(opts).unwrap();
+    assert_eq!(out.receipt.verdict(), Verdict::Failed);
+    let dir = conductor_engine::store::RunDir::for_run(p, &out.run_id);
+    let events = dir.read_events().unwrap();
+    assert!(
+        events.iter().any(|e| e.what.starts_with(
+            "scope failed: the agent changed tickets/T-2.md; only conductor writes evidence there"
+        )),
+        "{events:#?}"
+    );
+    // The evidence still went in, onto the ticket as it was at the base.
+    assert!(
+        events
+            .iter()
+            .any(|e| e.what.starts_with("evidence: ") && e.what.contains("tickets/T-2.md")),
+        "{events:#?}"
+    );
+    let wt = out.worktree.clone();
+    let ticket = fs::read_to_string(wt.join("tickets/T-2.md")).unwrap();
+    assert!(!ticket.contains("I say so"), "{ticket}");
+    assert!(ticket.contains("## Evidence"), "{ticket}");
+    assert!(
+        ticket.contains("scope** failed: the agent changed"),
+        "{ticket}"
+    );
 }

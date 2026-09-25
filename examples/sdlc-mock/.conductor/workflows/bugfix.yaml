@@ -1,0 +1,48 @@
+# A bug fix the way the team ships one: an agent fixes it, conductor deploys the service
+# and checks the ticket's acceptance criteria against it, every check's output and the
+# application log go into the ticket as they happen, and the run waits for the product
+# owner to approve from that evidence before the branch is ready for a PR.
+#
+#   conductor run .conductor/workflows/bugfix.yaml --spec tickets/BUG-101.md   (or 102, 103)
+id: bugfix
+version: 1
+kind: build
+
+defaults:
+  retries: { max: 2, ladder: [in_context, fresh] }
+
+budget:
+  max_stage_wall_clock_sec: 1200
+
+# The fresh checkout has no build: resolve everything once, so the checks can run offline.
+setup: [["mvn", "-q", "-B", "package"]]
+
+stages:
+  - id: fix
+    agent:
+      kind: claude
+      # This checkout is disposable, so the agent may run what it needs and the run
+      # finishes on its own. Narrow this list and anything else the agent asks for is put
+      # to whoever started the run (the page, `conductor ui`, `conductor allow`/`deny`),
+      # with the stage clock stopped while it waits.
+      allowed_tools: ["Bash"]
+    prompt_file: .conductor/prompts/fix.md
+    scope: { write: ["src/main/**"] }
+    # As it happens, into the ticket: each check with its output, then the service's log.
+    evidence:
+      to: "{{spec}}"
+      files: ["logs/app.log"]
+    gates:
+      - { type: scope }
+      - type: command_assert
+        command: ["mvn", "-q", "-B", "-o", "test"]
+        parser: junit_xml
+        report: "target/surefire-reports/TEST-*.xml"
+        assert: ["compiled == true", "tests_failed == 0", "tests_run > 0"]
+      # `{{spec}}` is the ticket the run was given: the script checks that ticket's ACs.
+      - { type: command_assert, command: ["./scripts/deploy-and-test.sh", "{{spec}}"], parser: exit }
+
+  - id: review
+    depends_on: [fix]
+    agent: { kind: human, who: PO }
+    prompt_file: .conductor/prompts/review.md

@@ -59,6 +59,21 @@ pub trait RunSource {
     fn stats(&self) -> Option<[(String, String); 3]> {
         None
     }
+    /// Records a person's decision on a `human` stage the run is waiting for, with the note
+    /// that says what they checked.
+    fn decide(
+        &self,
+        _run_id: &str,
+        _stage: &str,
+        _approved: bool,
+        _note: &str,
+    ) -> Result<(), String> {
+        Err("deciding is not available here".into())
+    }
+    /// Records a person's answer to a tool the run's agent asked for.
+    fn answer(&self, _run_id: &str, _ask: u32, _allowed: bool) -> Result<(), String> {
+        Err("answering is not available here".into())
+    }
 }
 
 pub struct App {
@@ -77,6 +92,9 @@ pub struct App {
     pub receipts: Vec<Receipt>,
     /// A run waiting on a person: work, what it asks, herdr tab.
     pub needs_you: Option<(String, String, u16)>,
+    /// A decision being typed on the live screen: approved or not, and the note so far.
+    /// Enter records it; Esc drops it.
+    pub deciding: Option<(bool, String)>,
     /// Three headline numbers for the runs screen: value and label.
     pub stats: [(String, String); 3],
     /// Sample data that plays itself, or real runs read from disk.
@@ -99,6 +117,7 @@ impl App {
             status: None,
             quit: false,
             receipts: vec![],
+            deciding: None,
             needs_you: demo::needs_you().map(|(w, a, t)| (w.into(), a.into(), t)),
             stats: [
                 ("3 running".into(), "in herdr tabs 2–4".into()),
@@ -306,6 +325,27 @@ impl App {
             self.quit = true;
             return;
         }
+        // Typing a decision's note owns every key until Enter or Esc.
+        if self.screen == Screen::Live
+            && let Some((yes, note)) = &mut self.deciding
+        {
+            match key.code {
+                KeyCode::Char(c) => note.push(c),
+                KeyCode::Backspace => {
+                    note.pop();
+                }
+                KeyCode::Esc => {
+                    self.deciding = None;
+                    self.status = Some("not recorded".into());
+                }
+                KeyCode::Enter => {
+                    let (yes, note) = (*yes, note.clone());
+                    self.record_decision(yes, &note);
+                }
+                _ => {}
+            }
+            return;
+        }
         // Typing a spec path owns every printable key.
         if self.screen == Screen::Launch && self.launch.focus == 1 {
             match key.code {
@@ -402,8 +442,56 @@ impl App {
             KeyCode::Char('p') if self.demo => {
                 self.status = Some("paused — p again to resume (demo)".into())
             }
+            KeyCode::Char(c @ ('y' | 'n')) if self.live.waiting.is_some() => {
+                let yes = c == 'y';
+                let w = self.live.waiting.clone().unwrap();
+                match w.ask {
+                    // A tool the agent asked for: the answer is enough.
+                    Some(ask) => {
+                        let word = if yes { "allowed" } else { "denied" };
+                        self.status = Some(match &self.source {
+                            Some(src) => match src.answer(&self.live.run_id, ask, yes) {
+                                Ok(()) => {
+                                    format!("{}: {word} as {}; the run continues", w.stage, w.who)
+                                }
+                                Err(e) => format!("not recorded: {e}"),
+                            },
+                            None => format!("{}: {word} (demo)", w.stage),
+                        });
+                    }
+                    // A stage's decision needs the note that says what was checked.
+                    None => {
+                        self.deciding = Some((yes, String::new()));
+                        self.status = Some(format!(
+                            "{}: type what you checked{}, then Enter · Esc to drop it",
+                            if yes { "approving" } else { "rejecting" },
+                            if yes { "" } else { ", or why not" }
+                        ));
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    fn record_decision(&mut self, yes: bool, note: &str) {
+        let Some(w) = self.live.waiting.clone() else {
+            self.deciding = None;
+            return;
+        };
+        if note.trim().is_empty() {
+            self.status = Some("a decision needs a note: what you checked, or why not".into());
+            return;
+        }
+        let word = if yes { "approved" } else { "rejected" };
+        self.status = Some(match &self.source {
+            Some(src) => match src.decide(&self.live.run_id, &w.stage, yes, note) {
+                Ok(()) => format!("{}: {word} as {}; the run continues", w.stage, w.who),
+                Err(e) => format!("not recorded: {e}"),
+            },
+            None => format!("{}: {word} (demo): {note}", w.stage),
+        });
+        self.deciding = None;
     }
 
     fn receipt_key(&mut self, code: KeyCode) {
@@ -550,6 +638,79 @@ mod tests {
         fn live(&self, id: &str) -> Option<LiveRun> {
             self.0.iter().find(|l| l.run_id == id).cloned()
         }
+    }
+
+    /// A source that remembers what was decided.
+    struct Deciding(LiveRun, std::cell::RefCell<Vec<(String, bool, String)>>);
+
+    impl RunSource for Deciding {
+        fn receipts(&self) -> Vec<Receipt> {
+            vec![]
+        }
+        fn running(&self) -> Vec<LiveRun> {
+            vec![self.0.clone()]
+        }
+        fn live(&self, _id: &str) -> Option<LiveRun> {
+            Some(self.0.clone())
+        }
+        fn decide(&self, _run: &str, stage: &str, yes: bool, note: &str) -> Result<(), String> {
+            self.1.borrow_mut().push((stage.into(), yes, note.into()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_decision_is_typed_with_its_note_before_it_is_recorded() {
+        let mut l = demo::live();
+        l.run_id = "W1".into();
+        l.waiting = Some(conductor_model::view::Waiting {
+            stage: "review".into(),
+            who: "PO".into(),
+            question: "Approve if AC1 is shown.".into(),
+            since: "2026-09-25T00:00:00Z".into(),
+            ask: None,
+        });
+        let src = std::rc::Rc::new(Deciding(l, std::cell::RefCell::new(vec![])));
+        struct Shared(std::rc::Rc<Deciding>);
+        impl RunSource for Shared {
+            fn receipts(&self) -> Vec<Receipt> {
+                self.0.receipts()
+            }
+            fn running(&self) -> Vec<LiveRun> {
+                self.0.running()
+            }
+            fn live(&self, id: &str) -> Option<LiveRun> {
+                self.0.live(id)
+            }
+            fn decide(&self, r: &str, s: &str, y: bool, n: &str) -> Result<(), String> {
+                self.0.decide(r, s, y, n)
+            }
+        }
+        let mut app = App::from_source(Box::new(Shared(src.clone())));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Live);
+        // `y` alone records nothing: the note is required.
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.deciding.is_some());
+        press(&mut app, KeyCode::Enter);
+        assert!(src.1.borrow().is_empty());
+        assert!(app.status.as_deref().unwrap().contains("needs a note"));
+        for c in "AC1 shown".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            src.1.borrow().as_slice(),
+            [("review".to_string(), true, "AC1 shown".to_string())]
+        );
+        assert!(app.deciding.is_none());
+        assert!(app.status.as_deref().unwrap().contains("approved as PO"));
+        // Esc drops a decision being typed.
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.deciding.is_none());
+        assert_eq!(src.1.borrow().len(), 1);
     }
 
     #[test]

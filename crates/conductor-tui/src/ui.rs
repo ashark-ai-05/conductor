@@ -280,12 +280,17 @@ fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let run = &app.live;
     let done = app.live_done();
-    let [head, _, pipe, _, ready, cols, _, panes, _] = Layout::vertical([
+    let [head, _, pipe, _, ready, wait, cols, _, panes, _] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Length(if done { 3 } else { 0 }),
+        Constraint::Length(match (&run.waiting, &app.deciding) {
+            (Some(_), Some(_)) => 6,
+            (Some(_), None) => 5,
+            (None, _) => 0,
+        }),
         Constraint::Length(10),
         Constraint::Length(1),
         Constraint::Length(if run.herdr_tab.is_some() { 5 } else { 0 }),
@@ -366,6 +371,53 @@ fn live(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
                     .style(Style::new().bg(bg)),
             ),
             ready,
+        );
+    }
+
+    // The run is paused for a person: what they are asked, and the keys that answer.
+    if let Some(w) = &run.waiting {
+        let question: String = w.question.split_whitespace().collect::<Vec<_>>().join(" ");
+        f.render_widget(
+            Paragraph::new(
+                vec![
+                    Line::from(vec![
+                        Span::styled(format!(" waiting for {} ", w.who), t.bold().bg(t.sel)),
+                        Span::styled(format!("  stage {}   ", w.stage), t.dim()),
+                        Span::styled(" y ", t.fg(t.pass).add_modifier(Modifier::BOLD).bg(t.sel)),
+                        Span::styled(
+                            if w.ask.is_some() {
+                                " allow   "
+                            } else {
+                                " approve   "
+                            },
+                            t.text(),
+                        ),
+                        Span::styled(" n ", t.fg(t.fail).add_modifier(Modifier::BOLD).bg(t.sel)),
+                        Span::styled(if w.ask.is_some() { " deny" } else { " reject" }, t.text()),
+                    ]),
+                    Line::from(Span::styled(question, t.text())),
+                ]
+                .into_iter()
+                .chain(app.deciding.as_ref().map(|(yes, note)| {
+                    Line::from(vec![
+                        Span::styled(
+                            format!(" {} ", if *yes { "approving" } else { "rejecting" }),
+                            t.bold().bg(t.sel),
+                        ),
+                        Span::styled("  note: ", t.dim()),
+                        Span::styled(format!("{note}▏"), t.text()),
+                        Span::styled("   Enter records · Esc drops", t.dim()),
+                    ])
+                }))
+                .collect::<Vec<_>>(),
+            )
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(t.fg(t.run)),
+            ),
+            wait,
         );
     }
 

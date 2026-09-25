@@ -6,7 +6,7 @@
 
 use crate::store::{Recorder, RunDir};
 use conductor_model::Verdict;
-use conductor_model::view::{CheckView, LiveRun, PaneView, StageView};
+use conductor_model::view::{CheckView, LiveRun, PaneView, StageView, Waiting};
 use conductor_model::workflow::{Stage, Workflow};
 use std::path::{Path, PathBuf};
 
@@ -57,6 +57,7 @@ impl Live {
                 panes: vec![],
                 ended: None,
                 pid: Some(std::process::id()),
+                waiting: None,
             },
             path: dir.root.join(FILE),
         }
@@ -124,6 +125,11 @@ impl Live {
                 opened_by: opened_by.into(),
             }),
         }
+    }
+
+    /// The run waits for `who` to decide `stage`; `None` once they have.
+    pub fn waiting(&mut self, w: Option<Waiting>) {
+        self.view.waiting = w;
     }
 
     pub fn end(&mut self, verdict: Verdict) {

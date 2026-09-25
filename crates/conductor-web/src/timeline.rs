@@ -34,6 +34,12 @@ pub enum Kind {
     Halt,
     /// Something conductor could only infer about the agent.
     Inferred,
+    /// A person decided.
+    Decision,
+    /// The agent asked for a tool and was refused, with nobody to ask.
+    Refused,
+    /// The agent asked a person for a tool and waited.
+    Asked,
     Other,
 }
 
@@ -273,7 +279,13 @@ pub fn build(run_id: &str, events: &[Event]) -> Timeline {
                 }
             }
             Source::Observed => {
-                entry.kind = Kind::Action;
+                entry.kind = if what.starts_with("refused: ") {
+                    Kind::Refused
+                } else if what.starts_with("asked: ") {
+                    Kind::Asked
+                } else {
+                    Kind::Action
+                };
                 let text = shorten(what, run_id);
                 let (tool, _) = text.split_once(' ').unwrap_or((&text, ""));
                 entry.tool = Some(tool.to_owned());
@@ -295,7 +307,8 @@ pub fn build(run_id: &str, events: &[Event]) -> Timeline {
                 }
             }
             Source::Inferred => entry.kind = Kind::Inferred,
-            Source::Human | Source::Unmanaged => {}
+            Source::Human => entry.kind = Kind::Decision,
+            Source::Unmanaged => {}
         }
         if let Some(i) = current
             && e.stage.is_some()

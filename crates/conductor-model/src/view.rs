@@ -57,6 +57,23 @@ pub struct LiveRun {
     /// The conductor process running it, so a run whose process died isn't shown as running.
     #[serde(default)]
     pub pid: Option<u32>,
+    /// A person's decision the run is waiting for.
+    #[serde(default)]
+    pub waiting: Option<Waiting>,
+}
+
+/// A `human` stage in progress: the run is paused until `who` decides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    pub stage: String,
+    pub who: String,
+    /// What they are asked to decide, from the stage's prompt.
+    pub question: String,
+    pub since: String,
+    /// Set when the question is a tool the agent asked for (`asks/<n>.json`), answered
+    /// with `conductor allow` or `deny`; unset for a `human` stage's decision.
+    #[serde(default)]
+    pub ask: Option<u32>,
 }
 
 impl LiveRun {

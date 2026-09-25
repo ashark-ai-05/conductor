@@ -135,6 +135,10 @@ pub struct Execution {
     pub ended: Ended,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
+    /// Time the clock was stopped while the command waited on a person; part of
+    /// `duration_ms`, not counted towards the timeout.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub paused_ms: u64,
     #[serde(skip)]
     pub stdout: Vec<u8>,
     pub stdout_truncated: bool,
@@ -153,6 +157,7 @@ impl Execution {
             ended: Ended::NotRun,
             exit_code: None,
             duration_ms: 0,
+            paused_ms: 0,
             stdout: Vec::new(),
             stdout_truncated: false,
             stdout_sha256: empty.clone(),
@@ -179,11 +184,14 @@ struct Captured {
     tail: Vec<String>,
 }
 
-fn capture(mut stream: impl Read, keep_all: bool) -> Captured {
+/// Reads a stream to its end: hashes all of it, keeps what fits, and, when `lines` is
+/// given, hands over each complete line as it arrives.
+fn capture(mut stream: impl Read, keep_all: bool, lines: Option<mpsc::Sender<String>>) -> Captured {
     let mut hasher = Sha256::new();
     let mut kept = Vec::new();
     let mut truncated = false;
     let mut buf = [0_u8; 8192];
+    let mut pending: Vec<u8> = Vec::new();
     loop {
         let n = match stream.read(&mut buf) {
             Ok(0) => break,
@@ -192,6 +200,13 @@ fn capture(mut stream: impl Read, keep_all: bool) -> Captured {
             Err(_) => break,
         };
         hasher.update(&buf[..n]);
+        if let Some(tx) = &lines {
+            pending.extend_from_slice(&buf[..n]);
+            while let Some(i) = pending.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = pending.drain(..=i).collect();
+                let _ = tx.send(String::from_utf8_lossy(&line[..line.len() - 1]).into_owned());
+            }
+        }
         let room = if keep_all {
             STDOUT_CAP.saturating_sub(kept.len())
         } else {
@@ -208,6 +223,11 @@ fn capture(mut stream: impl Read, keep_all: bool) -> Captured {
             let cut = kept.len() - 256 * 1024;
             kept.drain(..cut);
         }
+    }
+    if let Some(tx) = &lines
+        && !pending.is_empty()
+    {
+        let _ = tx.send(String::from_utf8_lossy(&pending).into_owned());
     }
     let tail = if keep_all {
         Vec::new()
@@ -228,6 +248,35 @@ fn capture(mut stream: impl Read, keep_all: bool) -> Captured {
 }
 
 pub fn run(spec: &Spec) -> Execution {
+    run_impl(spec, None, None)
+}
+
+/// Like [`run`], and `on_line` sees each line of stdout as the command writes it, so a
+/// long-running agent can be watched. Everything else, the hashes, the timeout, the
+/// group kill, is the same.
+pub fn run_streaming(spec: &Spec, on_line: &mut dyn FnMut(&str)) -> Execution {
+    run_impl(spec, Some(on_line), None)
+}
+
+/// Like [`run_streaming`], and `paused` is asked on every tick of the wait whether the
+/// command is waiting on a person. While it says so, the clock stops: that time does not
+/// count towards the timeout, and it is returned as `Execution::paused_ms`.
+pub fn run_pausable(
+    spec: &Spec,
+    on_line: &mut dyn FnMut(&str),
+    paused: &mut dyn FnMut() -> bool,
+) -> Execution {
+    run_impl(spec, Some(on_line), Some(paused))
+}
+
+/// How often the wait loop looks for new lines.
+const TICK: Duration = Duration::from_millis(50);
+
+fn run_impl(
+    spec: &Spec,
+    mut on_line: Option<&mut dyn FnMut(&str)>,
+    mut paused: Option<&mut dyn FnMut() -> bool>,
+) -> Execution {
     let Some(program) = spec.argv.first().filter(|p| !p.trim().is_empty()) else {
         return Execution::not_run(spec.argv, "the command is empty".into());
     };
@@ -269,14 +318,16 @@ pub fn run(spec: &Spec) -> Execution {
 
     let (out_tx, out_rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel();
+    let (line_tx, line_rx) = mpsc::channel::<String>();
+    let lines = on_line.is_some().then_some(line_tx);
     if let Some(s) = child.stdout.take() {
         std::thread::spawn(move || {
-            let _ = out_tx.send(capture(s, true));
+            let _ = out_tx.send(capture(s, true, lines));
         });
     }
     if let Some(s) = child.stderr.take() {
         std::thread::spawn(move || {
-            let _ = err_tx.send(capture(s, false));
+            let _ = err_tx.send(capture(s, false, None));
         });
     }
 
@@ -285,35 +336,68 @@ pub fn run(spec: &Spec) -> Execution {
         let _ = reaped.send(child.wait());
     });
 
-    let (ended, exit_code, mut reason) = match exited.recv_timeout(spec.timeout) {
-        Ok(Ok(status)) => (Ended::Exited, status.code(), None),
-        Ok(Err(e)) => (
-            Ended::NotRun,
-            None,
-            Some(format!("could not wait for `{program}`: {e}")),
-        ),
-        Err(RecvTimeoutError::Timeout) => {
-            for signal in [Signal::SIGTERM, Signal::SIGKILL] {
-                let _ = killpg(group, signal);
-                if exited.recv_timeout(GRACE).is_ok() {
-                    break;
-                }
+    // Wait for the exit, with a deadline, handing over stdout lines meanwhile. Nothing here
+    // blocks without one.
+    let mut deadline = started + spec.timeout;
+    let mut paused_for = Duration::ZERO;
+    let mut last_tick = Instant::now();
+    let (ended, exit_code, mut reason) = loop {
+        if let Some(f) = &mut on_line {
+            while let Ok(l) = line_rx.try_recv() {
+                f(&l);
             }
-            (
-                Ended::TimedOut,
-                None,
-                Some(format!("timed out after {}s", spec.timeout.as_secs())),
-            )
         }
-        Err(RecvTimeoutError::Disconnected) => (
-            Ended::NotRun,
-            None,
-            Some(format!("lost track of `{program}` while it ran")),
-        ),
+        // A pause moves the deadline out by the time that passed since the last tick.
+        let now = Instant::now();
+        if paused.as_mut().is_some_and(|p| p()) {
+            let slept = now.duration_since(last_tick);
+            deadline += slept;
+            paused_for += slept;
+        }
+        last_tick = now;
+        let left = deadline.saturating_duration_since(now);
+        match exited.recv_timeout(left.min(TICK)) {
+            Ok(Ok(status)) => break (Ended::Exited, status.code(), None),
+            Ok(Err(e)) => {
+                break (
+                    Ended::NotRun,
+                    None,
+                    Some(format!("could not wait for `{program}`: {e}")),
+                );
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                break (
+                    Ended::NotRun,
+                    None,
+                    Some(format!("lost track of `{program}` while it ran")),
+                );
+            }
+            Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
+                for signal in [Signal::SIGTERM, Signal::SIGKILL] {
+                    let _ = killpg(group, signal);
+                    if exited.recv_timeout(GRACE).is_ok() {
+                        break;
+                    }
+                }
+                break (
+                    Ended::TimedOut,
+                    None,
+                    Some(format!("timed out after {}s", spec.timeout.as_secs())),
+                );
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let paused_ms = u64::try_from(paused_for.as_millis()).unwrap_or(u64::MAX);
 
     let out = out_rx.recv_timeout(GRACE).ok();
+    if let Some(f) = &mut on_line {
+        // Every line the reader sent is queued before it hands over the capture.
+        while let Ok(l) = line_rx.try_recv() {
+            f(&l);
+        }
+    }
     let err = err_rx.recv_timeout(GRACE).ok();
     if (out.is_none() || err.is_none()) && reason.is_none() {
         reason = Some("the command exited but something it started kept its output open".into());
@@ -336,6 +420,7 @@ pub fn run(spec: &Spec) -> Execution {
         ended,
         exit_code,
         duration_ms,
+        paused_ms,
         stdout: out.kept,
         stdout_truncated: out.truncated,
         stdout_sha256: out.sha256,
@@ -345,9 +430,62 @@ pub fn run(spec: &Spec) -> Execution {
     }
 }
 
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paused_clock_does_not_count_towards_the_timeout() {
+        // Two seconds of work under a one-second timeout, paused throughout: it finishes.
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 2; echo ok".into(),
+        ];
+        let dir = std::env::temp_dir();
+        let e = run_pausable(
+            &Spec {
+                argv: &argv,
+                cwd: &dir,
+                timeout: Duration::from_secs(1),
+                pass_env: &[],
+                run_id: "r3",
+                inherit_env: false,
+                set_env: &[],
+            },
+            &mut |_| {},
+            &mut || true,
+        );
+        assert_eq!(e.ended, Ended::Exited, "{:?}", e.reason);
+        assert_eq!(e.stdout_text(), "ok\n");
+        assert!(e.paused_ms >= 1500, "{}", e.paused_ms);
+        assert!(e.duration_ms >= e.paused_ms);
+    }
+
+    #[test]
+    fn an_unpaused_clock_still_times_out() {
+        let argv = vec!["sh".to_string(), "-c".to_string(), "sleep 3".into()];
+        let dir = std::env::temp_dir();
+        let e = run_pausable(
+            &Spec {
+                argv: &argv,
+                cwd: &dir,
+                timeout: Duration::from_millis(300),
+                pass_env: &[],
+                run_id: "r4",
+                inherit_env: false,
+                set_env: &[],
+            },
+            &mut |_| {},
+            &mut || false,
+        );
+        assert_eq!(e.ended, Ended::TimedOut);
+        assert_eq!(e.paused_ms, 0);
+    }
 
     fn sh(script: &str, timeout: Duration) -> Execution {
         let argv = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
@@ -382,6 +520,36 @@ mod tests {
         assert!(e.stdout.len() > 1_000_000);
         assert!(e.stderr_tail.ends_with("200000"));
         assert!(e.stderr_tail.lines().count() <= TAIL_LINES);
+    }
+
+    #[test]
+    fn lines_arrive_while_the_command_runs() {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo first; sleep 1; echo second".to_string(),
+        ];
+        let dir = std::env::temp_dir();
+        let started = Instant::now();
+        let mut seen: Vec<(String, Duration)> = Vec::new();
+        let e = run_streaming(
+            &Spec {
+                argv: &argv,
+                cwd: &dir,
+                timeout: Duration::from_secs(10),
+                pass_env: &[],
+                run_id: "r2",
+                inherit_env: false,
+                set_env: &[],
+            },
+            &mut |l| seen.push((l.to_owned(), started.elapsed())),
+        );
+        assert_eq!(e.exit_code, Some(0));
+        assert_eq!(e.stdout_text(), "first\nsecond\n");
+        let names: Vec<&str> = seen.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(names, ["first", "second"]);
+        // "first" was handed over before "second" was even written.
+        assert!(seen[0].1 < Duration::from_millis(900), "{:?}", seen[0].1);
     }
 
     #[test]

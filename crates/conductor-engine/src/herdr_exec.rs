@@ -279,7 +279,7 @@ impl Executor for HerdrExecutor<'_> {
         "herdr"
     }
 
-    fn run(&self, b: &Brief) -> AgentRun {
+    fn run(&self, b: &Brief, _observe: &mut dyn FnMut(crate::executor::Observed)) -> AgentRun {
         let started = Instant::now();
         let since = SystemTime::now();
         let fresh = b.resume.is_none() && b.attempt > 1;

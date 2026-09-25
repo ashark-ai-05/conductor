@@ -193,10 +193,12 @@ pub fn build(
                 s.stage
             ));
         }
-        if s.declared.is_empty() {
+        // A person's stage has no checks to declare and no tokens: their decision is the check.
+        let human = s.agent == "human";
+        if s.declared.is_empty() && !human {
             not_checked.push(format!("{}: the stage declares no checks", s.stage));
         }
-        if s.tokens.is_none() {
+        if s.tokens.is_none() && !human {
             not_checked.push(format!(
                 "{}: token usage unavailable for `{}`",
                 s.stage, s.agent

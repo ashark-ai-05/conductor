@@ -263,9 +263,29 @@ pub struct Stage {
     pub gates: Vec<Gate>,
     pub on_failure: Option<OnFailure>,
     pub timeout_ms: Option<u64>,
+    /// Where this stage's evidence is written as it happens: every check's command, verdict
+    /// and output, plus the files named, appended to a ticket in the repository.
+    pub evidence: Option<Evidence>,
+}
+
+/// Evidence captured while a stage runs, appended to a file the reviewer already reads.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Evidence {
+    /// The file to append to, relative to the repository: a path, or `{{spec}}` for the
+    /// file `conductor run --spec` was given (the ticket).
+    pub to: String,
+    /// Files whose last lines are evidence too (an application log).
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 impl Stage {
+    /// A stage a person does: the run waits for their decision.
+    pub fn is_human(&self) -> bool {
+        self.agent.kind == "human"
+    }
+
     /// `gate:` and `gates:` together, in that order.
     pub fn all_gates(&self) -> impl Iterator<Item = &Gate> {
         self.gate.iter().chain(self.gates.iter())
@@ -289,6 +309,8 @@ pub struct Agent {
     /// `Bash(cargo test:*)`.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
+    /// For a `human` stage: who decides, as the receipt should name them ("PO", "QA lead").
+    pub who: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -391,6 +413,9 @@ impl Gate {
         }
     }
 }
+
+/// In `evidence.to`, the file `conductor run --spec` was given: the ticket.
+pub const SPEC: &str = "{{spec}}";
 
 /// In a `junit_xml` check's command, the path of a fresh file conductor reads the report
 /// from, outside the repository.
@@ -635,6 +660,45 @@ impl Workflow {
                 "a `script` agent needs a command to run",
             );
         }
+        if s.is_human() {
+            if s.all_gates().next().is_some() {
+                r.error(
+                    format!("{at}.gates"),
+                    "a `human` stage is the check: the person's decision passes or fails it, so it takes no gates",
+                );
+            }
+            if s.agent.who.as_deref().is_none_or(|w| w.trim().is_empty()) {
+                r.error(
+                    format!("{at}.agent.who"),
+                    "say who decides, as the receipt should name them (`who: PO`)",
+                );
+            }
+            if s.prompt_file.is_none() {
+                r.warn(
+                    format!("{at}.prompt_file"),
+                    "a `human` stage's prompt is what the person is asked to decide; without one they see only the evidence",
+                );
+            }
+        }
+        if let Some(e) = &s.evidence {
+            let to = e.to.trim();
+            if to != SPEC
+                && (to.starts_with('/') || to.split('/').any(|c| c == "..") || to.contains("{{"))
+            {
+                r.error(
+                    format!("{at}.evidence.to"),
+                    format!("must be a path inside the repository, or `{SPEC}` for the ticket the run was given"),
+                );
+            }
+            for (j, f) in e.files.iter().enumerate() {
+                if f.starts_with('/') || f.split('/').any(|c| c == "..") {
+                    r.error(
+                        format!("{at}.evidence.files[{j}]"),
+                        "must be a path inside the repository",
+                    );
+                }
+            }
+        }
         if s.agent.kind.trim().is_empty() {
             r.error(
                 format!("{at}.agent.kind"),
@@ -682,7 +746,7 @@ impl Workflow {
         }
 
         let gates: Vec<&Gate> = s.all_gates().collect();
-        if gates.is_empty() {
+        if gates.is_empty() && !s.is_human() {
             r.warn(
                 at.to_string(),
                 format!(
