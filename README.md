@@ -70,6 +70,32 @@ per run and per verified change, and how much of the record is witnessed rather 
 observed or inferred. Everything is read from `.conductor/runs/`; the server writes
 nothing and listens on localhost.
 
+## A person in the loop, and evidence where the reviewer looks
+
+A stage can be a person. The run pauses until they decide, from the evidence, and their
+decision is the stage's check on the receipt:
+
+```yaml
+  - id: fix
+    agent: { kind: claude }
+    evidence: { to: "{{spec}}", files: ["logs/app.log"] }   # into the ticket, as it happens
+    gates:
+      - { type: command_assert, command: ["./scripts/deploy-and-test.sh"], parser: exit }
+  - id: review
+    agent: { kind: human, who: PO }
+    prompt_file: .conductor/prompts/review.md            # what they are asked to decide
+```
+
+`evidence` appends every check's command, verdict and output, plus the files named, to
+the ticket the run was given (`--spec tickets/BUG-101.md`), while the stage runs, so there
+is nothing to collect afterwards. The decision lands there too. Decide from the run's
+page in `conductor serve`, or with `conductor approve <run> --by PO -m "…"` and
+`conductor reject`.
+
+`examples/sdlc-mock/` is a Spring Boot service with one real bug, a ticket, a local
+deploy and a log: the team's loop, small enough to run end to end in a minute. Its README
+says what it can and cannot prove.
+
 ## Commands
 
 | Command | What it does |
@@ -82,6 +108,7 @@ nothing and listens on localhost.
 | `check-pr` | In CI: check that a pull request's branch ends at a delivered run's receipt, from git alone |
 | `trace [<run>]`, `stats` | A run's timeline; what a repository's runs add up to |
 | `ui` | The terminal UI, including runs in progress (`--demo` for sample data) |
+| `approve`, `reject` | Decide a `human` stage the run is waiting on |
 | `serve` | The same runs in a browser: two lanes, replay, live, receipts, stats |
 | `pane …` | For agents inside a run: open, drive and close panes in the run's own tab |
 

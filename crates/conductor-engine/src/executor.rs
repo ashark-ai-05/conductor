@@ -320,6 +320,7 @@ mod tests {
                 model: Some("claude-sonnet-5".into()),
                 permission_mode: PermissionMode::AcceptEdits,
                 allowed_tools: vec!["Bash(cargo test:*)".into()],
+                who: None,
             },
             resume: Some("sess-1".into()),
             timeout: Duration::from_secs(1),

@@ -116,20 +116,6 @@ fn diffs_of(repo: &Path, id: &str) -> Vec<(String, usize)> {
     out
 }
 
-/// Every run with a record on disk, running ones first, then newest first.
-fn all_ids(repo: &Path) -> Vec<String> {
-    let mut ids: Vec<String> = std::fs::read_dir(repo.join(".conductor").join("runs"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join("events.jsonl").is_file())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    ids.sort();
-    ids.reverse();
-    ids
-}
-
 fn summarize(
     id: &str,
     events: &[Event],
@@ -218,7 +204,7 @@ fn outcome_verdict(outcome: &str) -> Verdict {
 }
 
 pub fn runs(repo: &Path) -> Vec<RunSummary> {
-    let mut out: Vec<RunSummary> = all_ids(repo)
+    let mut out: Vec<RunSummary> = conductor_engine::list_runs_any(repo)
         .iter()
         .map(|id| {
             let events = events_of(repo, id);

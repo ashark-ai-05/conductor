@@ -20,6 +20,9 @@ usage:
                 [--executor herdr|headless]
                                      run a workflow and write its receipt; in herdr
                                      each run gets a tab and each stage a pane
+  conductor approve <run-id> [--stage <id>] [--by <who>] [-m <note>]
+  conductor reject  <run-id> [--stage <id>] [--by <who>] [-m <note>]
+                                     decide a `human` stage the run is waiting on
   conductor receipt [<run-id>]       print a run's receipt (the latest by default)
   conductor verify <run-id>          re-check a run's record with no model calls
   conductor deliver [<run-id>] [--ready] [--base <branch>] [--remote <name>] [--no-pr]
@@ -80,6 +83,8 @@ fn real_main() -> Result<ExitCode> {
         Some("serve") => serve(&args[1..]),
         Some("doctor") => setup::doctor(&repo_root()?, herdr_handle()),
         Some("receipt") => receipt(&args[1..]),
+        Some("approve") => decide(&args[1..], true),
+        Some("reject") => decide(&args[1..], false),
         Some("verify") => verify_cmd(&args[1..]),
         Some("trace") => trace_cmd(&args[1..]),
         Some("stats") => stats_cmd(&args[1..]),
@@ -120,6 +125,7 @@ fn relative_to(repo: &Path, path: &str) -> Result<String> {
 fn run(args: &[String]) -> Result<ExitCode> {
     let mut workflow = None;
     let mut task = None;
+    let mut spec_path: Option<String> = None;
     let mut base = "HEAD".to_string();
     let mut executor: Option<String> = None;
     let mut it = args.iter();
@@ -128,6 +134,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
             "--spec" => {
                 let f = it.next().context("--spec needs a file")?;
                 task = Some(std::fs::read_to_string(f).with_context(|| format!("reading {f}"))?);
+                spec_path = Some(f.clone());
             }
             "-m" => task = Some(it.next().context("-m needs text")?.clone()),
             "--base" => base = it.next().context("--base needs a revision")?.clone(),
@@ -152,6 +159,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
     };
     let repo = repo_root()?;
     let workflow = relative_to(&repo, &workflow)?;
+    let spec_path = spec_path.map(|p| relative_to(&repo, &p)).transpose()?;
 
     // Inside a herdr pane and not in CI, run in herdr; otherwise headless.
     let in_herdr =
@@ -186,6 +194,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
         workflow,
         base,
         task,
+        spec_path,
         watcher: Some(tx),
         home: None,
         status_ui: matches!(mode, Mode::Herdr(_))
@@ -425,6 +434,52 @@ fn check_pr_cmd(args: &[String]) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+fn decide(args: &[String], approved: bool) -> Result<ExitCode> {
+    let mut run_id = None;
+    let mut stage = None;
+    let mut by = None;
+    let mut note = String::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--stage" => stage = Some(it.next().context("--stage needs a stage id")?.clone()),
+            "--by" => by = Some(it.next().context("--by needs a name")?.clone()),
+            "-m" => note = it.next().context("-m needs text")?.clone(),
+            other if other.starts_with('-') => bail!("unknown option `{other}`"),
+            other => run_id = Some(other.to_owned()),
+        }
+    }
+    let word = if approved { "approve" } else { "reject" };
+    let Some(run_id) = run_id else {
+        bail!("usage: conductor {word} <run-id> [--stage <id>] [--by <who>] [-m <note>]")
+    };
+    let repo = repo_root()?;
+    let dir = conductor_engine::store::RunDir::for_run(&repo, &run_id);
+    // The stage: the one given, else the one the run is waiting on.
+    let waiting = conductor_engine::live::read(&repo, &run_id).and_then(|l| l.waiting);
+    let stage = match (stage, &waiting) {
+        (Some(s), _) => s,
+        (None, Some(w)) => w.stage.clone(),
+        (None, None) => {
+            bail!("run {run_id} is not waiting on a decision; name the stage with --stage")
+        }
+    };
+    let by = by
+        .or_else(|| waiting.as_ref().map(|w| w.who.clone()))
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "someone".into());
+    let d = conductor_engine::decision::Decision {
+        approved,
+        by: by.clone(),
+        note,
+        at: conductor_engine::store::now(),
+    };
+    conductor_engine::decision::write(&dir, &stage, &d)
+        .with_context(|| format!("recording the decision on `{stage}`"))?;
+    println!("{stage}: {} by {by}", d.word());
+    Ok(ExitCode::SUCCESS)
 }
 
 fn serve(args: &[String]) -> Result<ExitCode> {

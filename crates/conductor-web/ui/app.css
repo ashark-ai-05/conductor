@@ -163,6 +163,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .entry.check.other { border-left-color: var(--warn); }
 .entry.halt { background: var(--fail-bg); border-left-color: var(--warn); }
 .entry.commit { border-left-color: var(--pass); }
+.entry.decision { background: var(--sel); border-left-color: var(--warn); font-weight: 600; }
+.lane-row.decision .spine i { background: var(--warn); }
 .entry .chk { font-weight: 600; margin-right: 6px; }
 .entry.hidden { display: none; }
 .folded { color: var(--dim); font-size: 12px; padding: 2px 8px; cursor: pointer; }

@@ -630,10 +630,10 @@ pub fn doctor(repo: &Path, herdr: conductor_herdr::Herdr) -> Result<ExitCode> {
                     "`claude` is not on PATH; install Claude Code",
                 ),
             },
-            "script" => {}
+            "script" | "human" => {}
             other => r.fail(
                 &format!("agent {other}"),
-                "only `claude` and `script` agents run in 0.1",
+                "only `claude`, `script` and `human` agents run in 0.1",
             ),
         }
     }

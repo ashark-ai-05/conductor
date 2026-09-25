@@ -34,6 +34,8 @@ pub enum Kind {
     Halt,
     /// Something conductor could only infer about the agent.
     Inferred,
+    /// A person decided.
+    Decision,
     Other,
 }
 
@@ -295,7 +297,8 @@ pub fn build(run_id: &str, events: &[Event]) -> Timeline {
                 }
             }
             Source::Inferred => entry.kind = Kind::Inferred,
-            Source::Human | Source::Unmanaged => {}
+            Source::Human => entry.kind = Kind::Decision,
+            Source::Unmanaged => {}
         }
         if let Some(i) = current
             && e.stage.is_some()

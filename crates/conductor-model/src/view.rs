@@ -57,6 +57,19 @@ pub struct LiveRun {
     /// The conductor process running it, so a run whose process died isn't shown as running.
     #[serde(default)]
     pub pid: Option<u32>,
+    /// A person's decision the run is waiting for.
+    #[serde(default)]
+    pub waiting: Option<Waiting>,
+}
+
+/// A `human` stage in progress: the run is paused until `who` decides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    pub stage: String,
+    pub who: String,
+    /// What they are asked to decide, from the stage's prompt.
+    pub question: String,
+    pub since: String,
 }
 
 impl LiveRun {

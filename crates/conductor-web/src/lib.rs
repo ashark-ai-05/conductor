@@ -87,12 +87,19 @@ fn query(url: &str, key: &str) -> Option<String> {
 }
 
 /// The response for one request. Split out so tests can drive it without sockets.
-pub fn respond(repo: &Path, method: &Method, url: &str) -> Reply {
+pub fn respond(repo: &Path, method: &Method, url: &str, body: &str) -> Reply {
+    let path = url.split('?').next().unwrap_or(url);
+    let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+    // The one write: a person's decision on a stage the run is waiting for.
+    if *method == Method::Post {
+        return match parts.as_slice() {
+            ["api", "runs", id, "decide"] if run_id_ok(id) => decide(repo, id, body),
+            _ => text(405, "text/plain; charset=utf-8", "read only"),
+        };
+    }
     if *method != Method::Get && *method != Method::Head {
         return text(405, "text/plain; charset=utf-8", "read only");
     }
-    let path = url.split('?').next().unwrap_or(url);
-    let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     match parts.as_slice() {
         ["app.js"] => text(200, "text/javascript; charset=utf-8", APP_JS),
         ["app.css"] => text(200, "text/css; charset=utf-8", APP_CSS),
@@ -117,8 +124,54 @@ pub fn respond(repo: &Path, method: &Method, url: &str) -> Reply {
     }
 }
 
-fn handle(repo: &Path, req: Request) -> io::Result<()> {
-    let resp = respond(repo, req.method(), req.url());
+#[derive(serde::Deserialize)]
+struct DecideBody {
+    stage: String,
+    approved: bool,
+    #[serde(default)]
+    by: String,
+    #[serde(default)]
+    note: String,
+}
+
+fn decide(repo: &Path, id: &str, body: &str) -> Reply {
+    let b: DecideBody = match serde_json::from_str(body) {
+        Ok(b) => b,
+        Err(e) => return text(400, "text/plain; charset=utf-8", e.to_string()),
+    };
+    if b.stage.contains(['/', '\\', '.']) {
+        return text(400, "text/plain; charset=utf-8", "bad stage");
+    }
+    let dir = conductor_engine::store::RunDir::for_run(repo, id);
+    if !dir.events().is_file() {
+        return text(404, "text/plain; charset=utf-8", "not found");
+    }
+    let d = conductor_engine::decision::Decision {
+        approved: b.approved,
+        by: if b.by.trim().is_empty() {
+            "someone".into()
+        } else {
+            b.by.trim().to_owned()
+        },
+        note: b.note,
+        at: conductor_engine::store::now(),
+    };
+    match conductor_engine::decision::write(&dir, &b.stage, &d) {
+        Ok(()) => json(Some(&d)),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            text(409, "text/plain; charset=utf-8", e.to_string())
+        }
+        Err(e) => text(500, "text/plain; charset=utf-8", e.to_string()),
+    }
+}
+
+fn handle(repo: &Path, mut req: Request) -> io::Result<()> {
+    let mut body = String::new();
+    if *req.method() == Method::Post {
+        use std::io::Read as _;
+        let _ = req.as_reader().take(64 * 1024).read_to_string(&mut body);
+    }
+    let resp = respond(repo, req.method(), req.url(), &body);
     req.respond(resp)
 }
 

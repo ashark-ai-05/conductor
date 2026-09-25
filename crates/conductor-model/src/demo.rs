@@ -129,6 +129,7 @@ pub fn live() -> LiveRun {
         panes: vec![pane("spec", P, false), pane("tests", P, false), pane("implement", R, true)],
         ended: None,
         pid: None,
+        waiting: None,
     };
     run.push_log("12:04:13", Source::Observed, "edited src/status.rs");
     run.push_log("12:04:20", Source::Witnessed, "scope passed");

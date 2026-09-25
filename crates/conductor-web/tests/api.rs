@@ -8,7 +8,7 @@ use std::path::Path;
 use tiny_http::Method;
 
 fn body(repo: &Path, url: &str) -> (u16, String) {
-    let r = respond(repo, &Method::Get, url);
+    let r = respond(repo, &Method::Get, url, "");
     let status = r.status_code().0;
     let mut s = String::new();
     r.into_reader().read_to_string(&mut s).unwrap();
@@ -131,11 +131,33 @@ fn only_conductors_own_paths_are_served() {
     assert_eq!(body(d.path(), "/app.css").0, 200);
     assert!(body(d.path(), "/run").1.contains("<title>conductor"));
     assert_eq!(
-        respond(d.path(), &Method::Post, "/api/runs")
+        respond(d.path(), &Method::Post, "/api/runs", "")
             .status_code()
             .0,
         405
     );
+    // The one write: a decision, once.
+    let decide = |body: &str| {
+        respond(
+            d.path(),
+            &Method::Post,
+            "/api/runs/0MUAAAAAAAAA1/decide",
+            body,
+        )
+        .status_code()
+        .0
+    };
+    assert_eq!(
+        decide(r#"{"stage":"review","approved":true,"by":"PO"}"#),
+        200
+    );
+    assert_eq!(decide(r#"{"stage":"review","approved":false}"#), 409);
+    assert_eq!(decide(r#"{"stage":"../x","approved":true}"#), 400);
+    let d1 =
+        conductor_engine::decision::read(&RunDir::for_run(d.path(), "0MUAAAAAAAAA1"), "review")
+            .unwrap();
+    assert_eq!((d1.approved, d1.by.as_str()), (true, "PO"));
+    // The one write: a decision, once.
     let (_, stats) = body(d.path(), "/api/stats");
     assert!(stats.contains("conductor.catches"));
 }

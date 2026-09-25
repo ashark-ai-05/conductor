@@ -278,6 +278,7 @@ async function runPage(main, id) {
     if (e.kind === "halt") return [h("b", {}, "halted "), e.text];
     if (e.kind === "usage") return [h("b", {}, "measured "), e.text];
     if (e.kind === "inferred") return ["inferred: ", e.text];
+    if (e.kind === "decision") return [h("b", {}, "decided "), e.text];
     return [e.text];
   }
   function legend() {
@@ -287,9 +288,10 @@ async function runPage(main, id) {
   function renderSide() {
     const d = state.d, r = d.receipt, s = d.summary;
     side.replaceChildren();
+    if (d.live && d.live.waiting) side.append(waitingPanel(d.live.waiting));
     if (!r) {
       side.append(h("div", { class: "panel" }, h("h3", {}, "receipt"), h("p", { class: "notes" }, s.running ? "The receipt is written when the run ends." : "This run has no receipt: it never finished.")));
-      if (d.live) side.append(livePanel(d.live));
+      if (d.live && !d.live.waiting) side.append(livePanel(d.live));
       return;
     }
     if (r.survivors.length) side.append(h("div", { class: "panel look" }, h("h3", {}, "look here first", h("small", {}, "bugs the tests missed")), ...r.survivors.map((x) => [h("div", { class: "at" }, x.at), h("div", { class: "chg" }, x.change)])));
@@ -299,6 +301,27 @@ async function runPage(main, id) {
     side.append(h("div", { class: "panel" }, h("h3", {}, "how it ran"), h("table", { class: "how" }, ...r.how.map(([k, v]) => h("tr", {}, h("td", {}, k), h("td", {}, v))),
       h("tr", {}, h("td", {}, "record"), h("td", {}, `chain ${i.chain_head.slice(0, 19)}… · ${i.anchored_in ? "anchored in " + i.anchored_in.slice(0, 12) : "not anchored"} · ${i.reproduces ? "re-checks cleanly" : "not re-checked"}`)),
       h("tr", {}, h("td", {}, "verify"), h("td", {}, h("code", {}, `conductor verify ${s.run_id}`))))));
+  }
+  // The run is paused for a person. Their decision is the one thing this page writes.
+  function waitingPanel(w) {
+    const field = "width:100%;box-sizing:border-box;font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px";
+    const note = h("textarea", { rows: 3, placeholder: "note for the record: what you checked, or why not", style: field + ";margin:8px 0" });
+    const by = h("input", { value: w.who, style: field, title: "who decides" });
+    const status = h("div", { class: "notes" });
+    const send = async (approved) => {
+      status.textContent = "recording…";
+      try {
+        const r = await fetch(`/api/runs/${id}/decide`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: w.stage, approved, by: by.value, note: note.value }) });
+        status.textContent = r.ok ? `${approved ? "approved" : "rejected"}; the run continues` : `not recorded: ${await r.text()}`;
+      } catch (e) { status.textContent = "not recorded: " + e.message; }
+    };
+    return h("div", { class: "panel", style: "border-color:var(--run)" },
+      h("h3", {}, `waiting for ${w.who}`, h("small", {}, `stage ${w.stage} · since ${ago(w.since)}`)),
+      h("p", { style: "margin:0 0 6px" }, w.question),
+      h("div", { class: "notes", style: "font-size:12px" }, "The evidence is in the ticket and in the lanes to the left. Approve only what you have checked."),
+      by, note,
+      h("div", { style: "display:flex;gap:8px" }, h("button", { class: "on", onclick: () => send(true) }, "✓ approve"), h("button", { onclick: () => send(false) }, "✗ reject")),
+      status);
   }
   function livePanel(l) {
     return h("div", { class: "panel rows" }, h("h3", {}, "checks now", h("small", {}, "run by conductor, not by the agent")), ...l.checks.map((c) => h("div", { class: "row" }, glyph(c.status), h("div", {}, h("div", { class: "claim" }, c.name), h("div", { class: "detail" }, c.detail)))), l.note ? h("p", { class: "notes" }, l.note) : null);
