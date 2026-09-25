@@ -162,13 +162,14 @@ fn bar(t: &Theme, checks: &[Verdict]) -> Line<'static> {
 
 fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let needs = app.needs_you.clone();
-    let [intro, _, stats, _, banner, list, _] = Layout::vertical([
+    let [intro, _, stats, _, banner, list, folded, _] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Length(if needs.is_some() { 3 } else { 0 }),
         Constraint::Length(app.runs.len() as u16 + 6),
+        Constraint::Length(if app.unchecked.is_empty() { 0 } else { 1 }),
         Constraint::Min(0),
     ])
     .areas(area);
@@ -273,6 +274,19 @@ fn runs(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     .block(block(t, "runs", "newest first", false));
     let mut state = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(table, list, &mut state);
+    if let Some(latest) = app.unchecked.first() {
+        let n = app.unchecked.len();
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(
+                    "  + {n} run{} that never reached a check · conductor receipt {latest}",
+                    if n == 1 { "" } else { "s" }
+                ),
+                t.faint(),
+            ))),
+            folded,
+        );
+    }
 }
 
 // ── live ────────────────────────────────────────────────────────────────────
@@ -515,13 +529,20 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     } else {
         1
     };
+    // A panel is drawn only when it has rows. An empty one says nothing a box can fix.
+    let nothing_checked = r.checks.is_empty();
+    let pair_rows = r.survivors.len().max(r.not_checked.len()).min(4) as u16;
     let [banner, _, proven, _, pair, _, how, reach] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(1),
-        Constraint::Length(r.checks.len() as u16 + 3),
+        Constraint::Length(if nothing_checked {
+            1
+        } else {
+            r.checks.len() as u16 + 3
+        }),
         Constraint::Length(1),
-        Constraint::Length(r.survivors.len().max(r.not_checked.len()).min(4) as u16 + 3),
-        Constraint::Length(1),
+        Constraint::Length(if pair_rows == 0 { 0 } else { pair_rows + 3 }),
+        Constraint::Length(if pair_rows == 0 { 0 } else { 1 }),
         Constraint::Length(how_height),
         Constraint::Length(1),
     ])
@@ -532,17 +553,24 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     } else {
         t.blocked_bg
     };
+    let verdict_word = if nothing_checked {
+        "NOTHING CHECKED".to_string()
+    } else {
+        v.word().to_uppercase()
+    };
+    let counts = if nothing_checked {
+        String::new()
+    } else {
+        format!("{} of {} checks", r.passed_count(), r.checks.len())
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                format!(" {} ", v.word().to_uppercase()),
+                format!(" {verdict_word} "),
                 t.verdict(v).add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("  {} · {}   ", r.work, r.run_id), t.text()),
-            Span::styled(
-                format!("{} of {} checks", r.passed_count(), r.checks.len()),
-                t.fg(t.pass),
-            ),
+            Span::styled(counts, t.fg(t.pass)),
             Span::styled(
                 format!("   {} things not checked", r.not_checked.len()),
                 t.fg(t.warn),
@@ -574,19 +602,39 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             ])
         })
         .collect();
-    f.render_widget(
-        Paragraph::new(rows).block(block(
-            t,
-            "what was proven",
-            "each of these could have failed",
-            false,
-        )),
-        proven,
-    );
+    if nothing_checked {
+        // Why is in "not checked" below: a halted setup, an agent that never started.
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("  nothing was proven: ", t.bold()),
+                Span::styled("no check ran", t.dim()),
+            ])),
+            proven,
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(rows).block(block(
+                t,
+                "what was proven",
+                "each of these could have failed",
+                false,
+            )),
+            proven,
+        );
+    }
 
-    let [look, gaps] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)])
-        .spacing(2)
-        .areas(pair);
+    // Survivors on the left, gaps on the right; one of them alone takes the width.
+    let (look, gaps) = match (r.survivors.is_empty(), r.not_checked.is_empty()) {
+        (false, false) => {
+            let [a, b] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)])
+                .spacing(2)
+                .areas(pair);
+            (Some(a), Some(b))
+        }
+        (false, true) => (Some(pair), None),
+        (true, false) => (None, Some(pair)),
+        (true, true) => (None, None),
+    };
     let mut s_lines: Vec<Line> = r
         .survivors
         .iter()
@@ -604,12 +652,14 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             t.fg(t.accent),
         )));
     }
-    f.render_widget(
-        Paragraph::new(s_lines)
-            .wrap(Wrap { trim: false })
-            .block(block(t, "look here first", "bugs the tests missed", true)),
-        look,
-    );
+    if let Some(look) = look {
+        f.render_widget(
+            Paragraph::new(s_lines)
+                .wrap(Wrap { trim: false })
+                .block(block(t, "look here first", "bugs the tests missed", true)),
+            look,
+        );
+    }
     let n_lines: Vec<Line> = r
         .not_checked
         .iter()
@@ -620,12 +670,14 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             ])
         })
         .collect();
-    f.render_widget(
-        Paragraph::new(n_lines)
-            .wrap(Wrap { trim: false })
-            .block(block(t, "not checked", "", false)),
-        gaps,
-    );
+    if let Some(gaps) = gaps {
+        f.render_widget(
+            Paragraph::new(n_lines)
+                .wrap(Wrap { trim: false })
+                .block(block(t, "not checked", "", false)),
+            gaps,
+        );
+    }
 
     if app.show_how {
         let mut lines: Vec<Line> = r
@@ -808,6 +860,46 @@ mod tests {
         ] {
             assert!(s.contains(want), "missing {want:?}\n{s}");
         }
+    }
+
+    #[test]
+    fn a_receipt_with_nothing_checked_says_so_in_one_line_and_draws_no_empty_box() {
+        let mut app = App::demo();
+        app.receipt.checks.clear();
+        app.receipt.survivors.clear();
+        app.receipt.not_checked = vec!["fix: setup `mvn package` exited 1".into()];
+        app.go(Screen::Receipt);
+        let s = render(&app, 140, 40);
+        for want in [
+            "NOTHING CHECKED",
+            "nothing was proven",
+            "no check ran",
+            "not checked",
+            "setup `mvn package` exited 1",
+        ] {
+            assert!(s.contains(want), "missing {want:?}\n{s}");
+        }
+        for gone in [
+            "what was proven",
+            "look here first",
+            "0 of 0 checks",
+            "NOT STARTED",
+        ] {
+            assert!(!s.contains(gone), "still shows {gone:?}\n{s}");
+        }
+    }
+
+    #[test]
+    fn a_run_that_never_reached_a_check_is_one_faint_line_under_the_list() {
+        let mut halted = conductor_model::demo::receipt();
+        halted.run_id = "HALT1".into();
+        halted.checks.clear();
+        let app = App::from_receipts(vec![halted, conductor_model::demo::receipt()]);
+        let s = render(&app, 140, 40);
+        assert!(
+            s.contains("+ 1 run that never reached a check · conductor receipt HALT1"),
+            "{s}"
+        );
     }
 
     #[test]

@@ -95,6 +95,9 @@ pub struct App {
     /// A decision being typed on the live screen: approved or not, and the note so far.
     /// Enter records it; Esc drops it.
     pub deciding: Option<(bool, String)>,
+    /// Runs whose receipt has no check at all (halted before any check ran), newest first.
+    /// They are not rows in the list: nothing about them is worth reviewing.
+    pub unchecked: Vec<String>,
     /// Three headline numbers for the runs screen: value and label.
     pub stats: [(String, String); 3],
     /// Sample data that plays itself, or real runs read from disk.
@@ -118,6 +121,7 @@ impl App {
             quit: false,
             receipts: vec![],
             deciding: None,
+            unchecked: vec![],
             needs_you: demo::needs_you().map(|(w, a, t)| (w.into(), a.into(), t)),
             stats: [
                 ("3 running".into(), "in herdr tabs 2–4".into()),
@@ -175,14 +179,22 @@ impl App {
                 None => conductor_model::Place::Headless,
             },
         });
-        let done_rows = receipts.iter().map(|r| RunSummary {
-            run_id: r.run_id.clone(),
-            work: r.work.clone(),
-            kind: r.kind.clone(),
-            status: r.verdict(),
-            checks: r.checks.iter().map(|c| c.verdict).collect(),
-            place: conductor_model::Place::Headless,
-        });
+        self.unchecked = receipts
+            .iter()
+            .filter(|r| r.checks.is_empty())
+            .map(|r| r.run_id.clone())
+            .collect();
+        let done_rows = receipts
+            .iter()
+            .filter(|r| !r.checks.is_empty())
+            .map(|r| RunSummary {
+                run_id: r.run_id.clone(),
+                work: r.work.clone(),
+                kind: r.kind.clone(),
+                status: r.verdict(),
+                checks: r.checks.iter().map(|c| c.verdict).collect(),
+                place: conductor_model::Place::Headless,
+            });
         let runs: Vec<RunSummary> = live_rows.chain(done_rows).collect();
         let passed = receipts
             .iter()
@@ -711,6 +723,21 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert!(app.deciding.is_none());
         assert_eq!(src.1.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_run_that_never_reached_a_check_is_folded_under_the_list() {
+        let mut ok = demo::receipt();
+        ok.run_id = "OK1".into();
+        let mut halted = demo::receipt();
+        halted.run_id = "HALT1".into();
+        halted.checks.clear();
+        halted.survivors.clear();
+        let app = App::from_receipts(vec![halted, ok]);
+        assert_eq!(app.runs.len(), 1);
+        assert_eq!(app.runs[0].run_id, "OK1");
+        assert_eq!(app.unchecked, vec!["HALT1".to_string()]);
+        assert!(app.stats[0].0.starts_with('2'));
     }
 
     #[test]
