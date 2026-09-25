@@ -21,10 +21,11 @@ stages:
   - id: fix
     agent:
       kind: claude
-      # The build and the checks the agent may run on its own. Anything else it asks for
-      # is put to whoever started the run, on the run's page, in `conductor ui`, or with
-      # `conductor allow` / `deny`; the agent and the stage clock wait for the answer.
-      allowed_tools: ["Bash(mvn:*)", "Bash(./scripts/deploy-and-test.sh:*)"]
+      # This checkout is disposable, so the agent may run what it needs and the run
+      # finishes on its own. Narrow this list and anything else the agent asks for is put
+      # to whoever started the run (the page, `conductor ui`, `conductor allow`/`deny`),
+      # with the stage clock stopped while it waits.
+      allowed_tools: ["Bash"]
     prompt_file: .conductor/prompts/fix.md
     scope: { write: ["src/main/**"] }
     # As it happens, into the ticket: each check with its output, then the service's log.
