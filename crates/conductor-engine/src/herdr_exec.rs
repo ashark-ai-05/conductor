@@ -279,7 +279,7 @@ impl Executor for HerdrExecutor<'_> {
         "herdr"
     }
 
-    fn run(&self, b: &Brief, _observe: &mut dyn FnMut(crate::executor::Observed)) -> AgentRun {
+    fn run(&self, b: &Brief, observe: &mut dyn FnMut(crate::executor::Observed)) -> AgentRun {
         let started = Instant::now();
         let since = SystemTime::now();
         let fresh = b.resume.is_none() && b.attempt > 1;
@@ -293,7 +293,7 @@ impl Executor for HerdrExecutor<'_> {
         )];
         let mut run = match self.kind.as_str() {
             "script" => run_script(&self.run.herdr, &pane, b, &self.run.agent_env(&b.stage)),
-            "claude" => run_claude(self.run, &pane, b, &mut notes),
+            "claude" => run_claude(self.run, &pane, b, &mut notes, observe),
             other => failed(
                 format!("the herdr executor can't run `{other}` agents yet"),
                 started,
@@ -399,9 +399,17 @@ fn claude_args(b: &Brief) -> Vec<String> {
     a
 }
 
-fn run_claude(run: &HerdrRun, pane: &str, b: &Brief, notes: &mut Vec<String>) -> AgentRun {
+fn run_claude(
+    run: &HerdrRun,
+    pane: &str,
+    b: &Brief,
+    notes: &mut Vec<String>,
+    observe: &mut dyn FnMut(crate::executor::Observed),
+) -> AgentRun {
     let started = Instant::now();
     let h = &run.herdr;
+    // Time spent waiting for a person at the pane: not the agent's, not counted.
+    let mut waited = Duration::ZERO;
     let name = match run.agent_of(&b.stage) {
         Some(n) => n,
         None => {
@@ -415,8 +423,38 @@ fn run_claude(run: &HerdrRun, pane: &str, b: &Brief, notes: &mut Vec<String>) ->
                 }
                 std::thread::sleep(Duration::from_millis(300));
             }
-            if let Err(e) = h.agent_start(&n, "claude", pane, &claude_args(b)) {
-                return failed(format!("herdr could not start claude: {e}"), started);
+            match h.agent_start(&n, "claude", pane, &claude_args(b)) {
+                Ok(()) => {}
+                // Claude asks something before it is ready, such as whether to trust a
+                // worktree it has not seen. herdr keeps the name; a person answers in the
+                // pane, and the clock stops until they do.
+                Err(e) if e.to_string().contains("agent_not_ready") => {
+                    run.set_agent(&b.stage, &n);
+                    let why = "claude is asking something at startup, most likely whether to trust this worktree; answer it in the agent's pane".to_string();
+                    observe(crate::executor::Observed::Blocked { why: why.clone() });
+                    notes.push(why);
+                    let from = Instant::now();
+                    let mut state = h.agent_state(&n).unwrap_or(AgentState::Unknown);
+                    while !state.is_ready() && started.elapsed() - waited < b.timeout {
+                        std::thread::sleep(Duration::from_secs(2));
+                        state = h.agent_state(&n).unwrap_or(AgentState::Unknown);
+                    }
+                    waited += from.elapsed();
+                    if !state.is_ready() {
+                        return failed(
+                            format!(
+                                "nobody answered claude's startup question in its pane within {}s",
+                                b.timeout.as_secs()
+                            ),
+                            started,
+                        );
+                    }
+                    notes.push(format!(
+                        "a person answered at the pane after {}s",
+                        waited.as_secs()
+                    ));
+                }
+                Err(e) => return failed(format!("herdr could not start claude: {e}"), started),
             }
             run.set_agent(&b.stage, &n);
             n
@@ -428,31 +466,46 @@ fn run_claude(run: &HerdrRun, pane: &str, b: &Brief, notes: &mut Vec<String>) ->
         Err(e) => return failed(format!("herdr could not prompt the agent: {e}"), started),
     };
     notes.push(format!("herdr says the agent is {state:?}").to_lowercase());
-    // Blocked is normal control flow: a person answers in the pane. Wait for them, within
-    // the stage's budget, and never treat `unknown` as finished.
-    let mut waited = false;
-    while !state.is_ready() && started.elapsed() < b.timeout {
-        if state == AgentState::Blocked && !waited {
-            notes.push("the agent is waiting for you in its pane".into());
-            waited = true;
+    // Blocked is normal control flow: a person answers in the pane. Wait for them, with the
+    // clock stopped, and never treat `unknown` as finished.
+    let mut blocked_since: Option<Instant> = None;
+    while !state.is_ready() && started.elapsed() - waited < b.timeout {
+        if state == AgentState::Blocked && blocked_since.is_none() {
+            let why = "the agent is asking something; answer it in its pane".to_string();
+            observe(crate::executor::Observed::Blocked { why: why.clone() });
+            notes.push(why);
+            blocked_since = Some(Instant::now());
         }
         std::thread::sleep(Duration::from_secs(2));
         state = h.agent_state(&name).unwrap_or(AgentState::Unknown);
+        if state != AgentState::Blocked
+            && let Some(since) = blocked_since.take()
+        {
+            waited += since.elapsed();
+        }
     }
+    if let Some(since) = blocked_since {
+        waited += since.elapsed();
+    }
+    let waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
     if state.is_ready() {
         AgentRun {
             finished: true,
             final_text: h.agent_read(&name, 60).unwrap_or_default(),
+            waited_ms,
             ..AgentRun::default()
         }
     } else {
-        failed(
-            format!(
-                "the agent never settled (herdr says {state:?}) within {}s",
-                b.timeout.as_secs()
-            ),
-            started,
-        )
+        AgentRun {
+            waited_ms,
+            ..failed(
+                format!(
+                    "the agent never settled (herdr says {state:?}) within {}s",
+                    b.timeout.as_secs()
+                ),
+                started,
+            )
+        }
     }
 }
 

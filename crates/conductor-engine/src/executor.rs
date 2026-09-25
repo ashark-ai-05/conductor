@@ -97,6 +97,9 @@ pub enum Observed {
         answer: Answer,
         waited: Duration,
     },
+    /// The agent is stopped on something only a person at its pane can answer (herdr's
+    /// reading of the terminal). The clock stops until they do.
+    Blocked { why: String },
 }
 
 pub trait Executor: Send + Sync {

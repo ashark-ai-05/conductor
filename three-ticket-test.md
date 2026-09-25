@@ -26,5 +26,26 @@ happens, and the review was done from the tickets afterwards. Result: 6 of 6, wi
 column as the list of what to change, in order: cut the noise, say each check once, show the
 before, show the change, keep the agent out of the ticket, require a note on approve.
 
+## Second run, 2026-09-25, after the six changes
+
+| date | ticket | approve from the ticket alone? | a PO at work would accept this? | if no, what was missing |
+|------|--------|--------------------------------|---------------------------------|-------------------------|
+| 2026-09-25 | BUG-101 | (rejected on purpose, to see the reject path) | | the rejection and its reason land in the ticket; nothing loops back to the agent |
+| 2026-09-25 | BUG-102 | yes | yes | "satisfactory evidence provided" |
+| 2026-09-25 | BUG-103 | yes | yes | note was "approved": a required note cannot make a good note |
+
+Runs 0MUGNS5BX8U, 0MUGNUOG5TR, 0MUGNXY7TNJ. On 102 and 103 the agent wrote the ticket's
+root cause on try 1, was stopped, and passed on try 2 without touching it: the guard works
+against a real agent, at the cost of one retry (about $1). Reviewed from the run page.
+
+What the reviewer said while reviewing, verbatim: "i dont know where to look. where is the
+ui?" The page and the TUI both say the evidence is in the ticket and neither shows it; the
+reviewer had to open the ticket file with git. That is the first real incident for the
+review panel item, from the person on the scope card, at the moment on the card.
+
+Also seen: the agent inherits the reviewer's global Claude plugins (a memory plugin wrote
+notes under the repository root, outside the worktree, through Bash, which the mock
+allows). On the later list: start the headless agent without the user's own settings.
+
 Result: 6 of 6 yes means worked; anything else says what to build next, in the last
 column. Decide from this table, not from a feeling.

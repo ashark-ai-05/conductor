@@ -177,6 +177,9 @@ fn run(args: &[String]) -> Result<ExitCode> {
         None if in_herdr => Mode::Herdr(herdr_handle()),
         None => Mode::Headless,
     };
+    if let Mode::Herdr(h) = &mode {
+        ensure_herdr_server(h)?;
+    }
 
     let (tx, rx) = std::sync::mpsc::channel::<Event>();
     let printer = std::thread::spawn(move || {
@@ -243,6 +246,40 @@ fn run(args: &[String]) -> Result<ExitCode> {
 
 /// The herdr to drive: `$CONDUCTOR_HERDR_BIN` (default `herdr`), in the session this
 /// process runs in, or `$CONDUCTOR_HERDR_SESSION` when set.
+/// A herdr run needs herdr's server. When none is reachable, start one headless, the way
+/// `herdr` itself would, so one command is enough; the person opens `herdr` to watch.
+fn ensure_herdr_server(h: &conductor_herdr::Herdr) -> Result<()> {
+    use conductor_herdr::HerdrError;
+    match h.check_protocol() {
+        Ok(_) => return Ok(()),
+        Err(e @ (HerdrError::Missing(_) | HerdrError::Protocol { .. })) => bail!("{e}"),
+        Err(_) => {}
+    }
+    let mut cmd = std::process::Command::new(h.bin());
+    if let conductor_herdr::Target::Session(s) = h.target() {
+        cmd.args(["--session", s]);
+    }
+    cmd.arg("server")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd.spawn().with_context(|| {
+        format!(
+            "starting herdr's server with `{} server`",
+            h.bin().display()
+        )
+    })?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if h.check_protocol().is_ok() {
+            eprintln!("started herdr's server; open `herdr` to watch the run in its tab");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    bail!("herdr's server did not come up within 15s; start `herdr` and try again")
+}
+
 fn herdr_handle() -> conductor_herdr::Herdr {
     let bin = std::env::var("CONDUCTOR_HERDR_BIN").unwrap_or_else(|_| "herdr".into());
     let target = match std::env::var("CONDUCTOR_HERDR_SESSION") {

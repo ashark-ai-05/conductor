@@ -142,7 +142,9 @@ function story(d) {
 async function runPage(main, id) {
   let d;
   try { d = await get(`/api/runs/${id}`); } catch (e) { main.append(h("div", { class: "empty" }, `run ${id}: ${e.message}`)); return; }
-  const state = { d, cursor: Infinity, playing: false, timer: null, follow: d.summary.running, diffsOpen: new Set(), foldActions: true };
+  const state = { d, cursor: Infinity, playing: false, timer: null, follow: d.summary.running, arrived: false, diffsOpen: new Set(), foldActions: true };
+  // Scrolling up while following means the reader wants to stay where they are.
+  window.addEventListener("wheel", (ev) => { if (ev.deltaY < 0) state.follow = false; }, { passive: true });
   const head = h("div");
   const controls = h("div", { class: "controls" });
   const lanes = h("div");
@@ -229,7 +231,8 @@ async function runPage(main, id) {
     }
     flush();
     lanes.replaceChildren(frag);
-    if (state.follow) lanes.lastElementChild?.scrollIntoView({ block: "nearest" });
+    if (state.follow && state.arrived) lanes.lastElementChild?.scrollIntoView({ block: "nearest" });
+    state.arrived = false;
   }
   function bandEl(a, cursor) {
     const ended = a.end_ms !== undefined && a.end_ms !== null && a.last_seq <= cursor;
@@ -345,9 +348,15 @@ async function runPage(main, id) {
       const t = state.d.timeline, since = t.entries.length ? t.entries[t.entries.length - 1].seq : 0;
       let tail;
       try { tail = await get(`/api/runs/${id}/tail?since=${since}`); } catch { return; }
+      // Redraw only when something happened: a redraw replaces the side panel, and a
+      // note being typed there with it.
+      const waitingNow = JSON.stringify(tail.live?.waiting ?? null), waitingBefore = JSON.stringify(state.d.live?.waiting ?? null);
+      const changed = tail.entries.length > 0 || tail.ended || waitingNow !== waitingBefore || tail.attempts.length !== t.attempts.length;
       t.entries.push(...tail.entries); t.attempts = tail.attempts; t.cost_usd = tail.cost_usd; t.tokens = tail.tokens; t.catches = tail.catches;
       state.d.summary = tail.summary; state.d.live = tail.live; state.d.diffs = tail.diffs;
       if (tail.ended) { clearInterval(timer); try { state.d = await get(`/api/runs/${id}`); } catch {} }
+      if (!changed) return;
+      state.arrived = tail.entries.length > 0;
       render(); if (state.follow) renderControls();
     };
     const timer = setInterval(poll, 1000);
