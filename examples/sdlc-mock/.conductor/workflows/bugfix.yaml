@@ -3,7 +3,7 @@
 # application log go into the ticket as they happen, and the run waits for the product
 # owner to approve from that evidence before the branch is ready for a PR.
 #
-#   conductor run .conductor/workflows/bugfix.yaml --spec tickets/BUG-101.md
+#   conductor run .conductor/workflows/bugfix.yaml --spec tickets/BUG-101.md   (or 102, 103)
 id: bugfix
 version: 1
 kind: build
@@ -39,7 +39,8 @@ stages:
         parser: junit_xml
         report: "target/surefire-reports/TEST-*.xml"
         assert: ["compiled == true", "tests_failed == 0", "tests_run > 0"]
-      - { type: command_assert, command: ["./scripts/deploy-and-test.sh"], parser: exit }
+      # `{{spec}}` is the ticket the run was given: the script checks that ticket's ACs.
+      - { type: command_assert, command: ["./scripts/deploy-and-test.sh", "{{spec}}"], parser: exit }
 
   - id: review
     depends_on: [fix]

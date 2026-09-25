@@ -29,8 +29,10 @@ reviews) → PR (Bitbucket; agents and people review) → merge → deploy to pr
 - Any language via JUnit XML; `init` per stack; `setup:`.
 - `agent: { kind: human, who: PO }` stages; `evidence: { to: "{{spec}}" }` into the
   ticket as it happens; `conductor approve`/`reject`, the page's buttons, `y`/`n` in the TUI.
-- `examples/sdlc-mock`: Spring Boot service, BUG-101, deploy-and-test, the `bugfix`
-  workflow. `tests/sdlc_mock.rs` runs it end to end.
+- `examples/sdlc-mock`: Spring Boot service, BUG-101/102/103, a deploy script that checks
+  the run's ticket's ACs (`{{spec}}` in a check's command is the ticket), the `bugfix`
+  workflow. `tests/sdlc_mock.rs` runs all three end to end. `three-ticket-test.md` is the
+  sheet for the scope card's measure.
 - Claude agents' tool calls and refusals are recorded as they happen.
 - A tool the agent asks for is answered by a person: `conductor ask` is Claude's
   `--permission-prompt-tool` (an MCP server over the run's `asks/` files); the run page,
@@ -45,9 +47,10 @@ at work would accept this" are both yes. Stop means: approving without reading.
 
 ## Next, in order
 
-1. Show the ticket's evidence on the review panel (today it says "in the ticket" but
-   does not show it).
-2. Two more mock tickets for the three-ticket test.
+1. Run the three-ticket test with the real Claude and fill in `three-ticket-test.md`.
+   No feature before its answers are in.
+2. From the answers: whether the review panel needs to show the ticket's evidence (today
+   it says "in the ticket" but does not show it), or nothing.
 3. Then, only after the test: investigate stage, rejection looping back to fix, Amp or
    Copilot as an agent, Jira/Bamboo/Bitbucket over MCP.
 

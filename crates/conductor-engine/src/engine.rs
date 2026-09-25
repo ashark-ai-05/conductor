@@ -368,6 +368,28 @@ struct StagePaths {
     frozen: Vec<String>,
     outputs: BTreeMap<String, String>,
     inputs: BTreeMap<String, String>,
+    /// The ticket the run was given, for `{{spec}}` in a check's command.
+    spec: Option<String>,
+}
+
+/// A check's command with `{{spec}}` filled in: the ticket the run was given, so one
+/// script can check whichever ticket's acceptance criteria this run is for. Without a
+/// ticket the placeholder stays, and the check says so when it fails.
+fn with_spec<'g>(g: &'g Gate, spec: Option<&str>) -> std::borrow::Cow<'g, Gate> {
+    match (g, spec) {
+        (Gate::CommandAssert { command, .. }, Some(spec))
+            if command.iter().any(|a| a.contains(SPEC)) =>
+        {
+            let mut g = g.clone();
+            if let Gate::CommandAssert { command, .. } = &mut g {
+                for a in command.iter_mut() {
+                    *a = a.replace(SPEC, spec);
+                }
+            }
+            std::borrow::Cow::Owned(g)
+        }
+        _ => std::borrow::Cow::Borrowed(g),
+    }
 }
 
 /// Where a stage's evidence goes, if it declares any: `{{spec}}` is the ticket the run was
@@ -405,6 +427,7 @@ fn stage_paths(wf: &Workflow, s: &Stage, run_id: &str, spec_path: Option<&str>) 
             .iter()
             .map(|(k, v)| (k.clone(), wf.render(v, run_id)))
             .collect(),
+        spec: spec_path.map(str::to_owned),
     }
 }
 
@@ -493,7 +516,10 @@ fn brief_text(
         t.push_str(&format!("- Produce `{id}` at {path}\n"));
     }
     for g in s.all_gates() {
-        t.push_str(&format!("- Check: {}\n", describe_gate(g)));
+        t.push_str(&format!(
+            "- Check: {}\n",
+            describe_gate(&with_spec(g, p.spec.as_deref()))
+        ));
     }
     if let Some(h) = pane_help {
         t.push_str(h);
@@ -1070,7 +1096,7 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                         baseline_tests: baseline.as_ref(),
                         scratch: &scratch,
                     };
-                    let r = gate::evaluate(g, &ctx);
+                    let r = gate::evaluate(&with_spec(g, paths.spec.as_deref()), &ctx);
                     let hashes = r
                         .executions
                         .iter()

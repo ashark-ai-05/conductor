@@ -100,9 +100,9 @@ on the run's page, in `conductor ui` (`y` / `n`), and for `conductor allow <run>
 answer and the time spent waiting are on the record. Nobody answering within a day is a
 deny in nobody's name.
 
-`examples/sdlc-mock/` is a Spring Boot service with one real bug, a ticket, a local
-deploy and a log: the team's loop, small enough to run end to end in a minute. Its README
-says what it can and cannot prove.
+`examples/sdlc-mock/` is a Spring Boot service with three real bugs, a ticket for each, a
+local deploy that checks the ticket's acceptance criteria, and a log: the team's loop,
+small enough to run end to end in a minute. Its README says what it can and cannot prove.
 
 ## Commands
 

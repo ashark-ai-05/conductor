@@ -15,7 +15,8 @@ public class LedgerService {
 
     private final Map<String, List<BigDecimal>> ledger = Map.of(
             "ACC-1", List.of(new BigDecimal("100.00"), new BigDecimal("75.50"), new BigDecimal("-25.50")),
-            "ACC-2", List.of());
+            "ACC-2", List.of(),
+            "ACC-3", List.of(new BigDecimal("10.005")));
 
     public BigDecimal balance(String accountId) {
         List<BigDecimal> postings = ledger.get(accountId);
