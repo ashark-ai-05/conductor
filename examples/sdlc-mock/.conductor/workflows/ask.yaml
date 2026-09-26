@@ -1,0 +1,36 @@
+# A question, answered with what was looked at, and a person saying whether it is
+# answered. No ticket: the question is the task.
+#
+#   conductor run .conductor/workflows/ask.yaml -m "why is the balance for ACC-3 a cent short?"
+#
+# The receipt cannot say the answer is right: nothing here re-checks a claim. It says the
+# answer exists, what it cites, and who accepted it. Grading claims is the `adhoc` kind,
+# which is not built yet.
+id: ask
+version: 1
+kind: build
+
+defaults:
+  retries: { max: 1, ladder: [in_context] }
+
+budget:
+  max_stage_wall_clock_sec: 900
+
+stages:
+  - id: answer
+    agent:
+      kind: claude
+      # This checkout is disposable; the agent may read and run what it needs.
+      allowed_tools: ["Bash"]
+    prompt_file: .conductor/prompts/ask.md
+    scope: { write: ["answers/**"] }
+    outputs:
+      - { id: answer, path: "answers/{{run_id}}.md", required: true }
+    gates:
+      - { type: scope }
+      - { type: file_nonempty, ref: answer }
+
+  - id: check
+    depends_on: [answer]
+    agent: { kind: human, who: asker }
+    prompt_file: .conductor/prompts/check-answer.md

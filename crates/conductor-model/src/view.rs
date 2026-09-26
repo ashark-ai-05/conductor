@@ -92,6 +92,18 @@ pub struct Review {
     pub change: Change,
     pub evidence: Vec<EvidenceRow>,
     pub cost: Cost,
+    /// What the stages declared as their outputs, with the first lines of each: for a
+    /// question, the answer is the thing to read.
+    #[serde(default)]
+    pub produced: Vec<Produced>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Produced {
+    pub path: String,
+    pub lines: Vec<String>,
+    /// How many lines the file has in all.
+    pub total: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

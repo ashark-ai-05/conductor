@@ -575,11 +575,33 @@ fn review_screen(
         .map(|e| 1 + e.lines.len().min(4) as u16)
         .sum::<u16>()
         .max(1);
-    let [head, _, asks, _, changed, _, checks, _, cost, _, wait, _] = Layout::vertical([
+    let n_produced: u16 = r
+        .produced
+        .iter()
+        .map(|p| 1 + p.lines.len().min(16) as u16)
+        .sum();
+    let [
+        head,
+        _,
+        asks,
+        _,
+        made,
+        _,
+        changed,
+        _,
+        checks,
+        _,
+        cost,
+        _,
+        wait,
+        _,
+    ] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(n_criteria + 3),
         Constraint::Length(1),
+        Constraint::Length(if n_produced == 0 { 0 } else { n_produced + 3 }),
+        Constraint::Length(if n_produced == 0 { 0 } else { 1 }),
         Constraint::Length(1 + n_files + 3),
         Constraint::Length(1),
         Constraint::Length(n_checks + 3),
@@ -590,6 +612,33 @@ fn review_screen(
         Constraint::Min(0),
     ])
     .areas(area);
+
+    // What the stages produced: for a question, the answer itself.
+    if n_produced > 0 {
+        let mut lines: Vec<Line> = Vec::new();
+        for p in &r.produced {
+            lines.push(Line::from(vec![
+                Span::styled(p.path.clone(), t.bold()),
+                Span::styled(
+                    if p.total > 16 {
+                        format!("  first 16 of {} lines", p.total)
+                    } else {
+                        String::new()
+                    },
+                    t.faint(),
+                ),
+            ]));
+            for l in p.lines.iter().take(16) {
+                lines.push(Line::from(Span::styled(format!("  {l}"), t.text())));
+            }
+        }
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(block(t, "what it produced", "the agent's own words", false)),
+            made,
+        );
+    }
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -934,23 +983,6 @@ fn receipt(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
 fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let l = &app.launch;
-    let radio = |on: bool, label: &str, later: Option<&str>| -> Vec<Span<'static>> {
-        let mut v = vec![
-            Span::styled(
-                if on { "(•) " } else { "( ) " },
-                if on { t.fg(t.accent) } else { t.faint() },
-            ),
-            Span::styled(
-                label.to_owned(),
-                if later.is_some() { t.faint() } else { t.text() },
-            ),
-        ];
-        if let Some(r) = later {
-            v.push(Span::styled(format!(" {r}"), t.faint()));
-        }
-        v.push(Span::raw("     "));
-        v
-    };
     let q = |n: usize, text: &str| -> Line<'static> {
         let focused = l.focus + 1 == n;
         Line::from(vec![
@@ -965,40 +997,56 @@ fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
     let mut lines = vec![
         Line::from(Span::styled(
-            "Three questions, then conductor opens a new herdr tab for the run.",
+            "Two questions, then conductor starts the run and follows it here.",
             t.dim(),
         )),
         Line::raw(""),
+        q(1, "Which workflow?"),
     ];
-    lines.push(q(1, "What kind of work?"));
-    let mut kinds = vec![Span::raw("     ")];
-    kinds.extend(radio(true, "build a change", None));
-    kinds.extend(radio(false, "ask a question", Some("v0.2")));
-    kinds.extend(radio(false, "QA", Some("v0.2")));
-    kinds.extend(radio(false, "troubleshoot", Some("v0.3")));
-    lines.push(Line::from(kinds));
-    lines.push(Line::from(Span::styled(
-        "     spec → tests by one agent → code by another",
-        t.dim(),
-    )));
+    if l.workflows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "     none under .conductor/workflows/ · `conductor init` writes one",
+            t.faint(),
+        )));
+    } else {
+        let mut choices = vec![Span::raw("     ")];
+        for (i, w) in l.workflows.iter().enumerate() {
+            let on = i == l.workflow;
+            let name = w
+                .rsplit('/')
+                .next()
+                .unwrap_or(w)
+                .trim_end_matches(".yaml")
+                .to_owned();
+            choices.push(Span::styled(
+                if on { "(•) " } else { "( ) " },
+                if on { t.fg(t.accent) } else { t.faint() },
+            ));
+            choices.push(Span::styled(name, if on { t.text() } else { t.dim() }));
+            choices.push(Span::raw("     "));
+        }
+        lines.push(Line::from(choices));
+        if let Some(w) = l.workflows.get(l.workflow) {
+            lines.push(Line::from(Span::styled(format!("     {w}"), t.faint())));
+        }
+    }
     lines.push(Line::raw(""));
-    lines.push(q(2, "What should it build?"));
+    lines.push(q(2, "What should it work on?"));
     let cursor = if l.focus == 1 { "▏" } else { "" };
     lines.push(Line::from(vec![
         Span::raw("     "),
         Span::styled(format!(" {}{cursor} ", l.spec), t.text().bg(t.sel)),
     ]));
-    lines.push(Line::raw(""));
-    lines.push(q(3, "Where should it run?"));
-    let mut place = vec![Span::raw("     ")];
-    place.extend(radio(!l.headless, "herdr, in a new tab", None));
-    place.extend(radio(l.headless, "in the background", None));
-    lines.push(Line::from(place));
     lines.push(Line::from(Span::styled(
-        if l.headless {
-            "     no panes; for CI and overnight"
+        "     a ticket path, or the task in your words",
+        t.dim(),
+    )));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        if l.herdr {
+            "     runs in a herdr tab: you can watch and step in"
         } else {
-            "     you can watch and step in · opens herdr tab 5; 3 runs already active"
+            "     runs headless: no panes; the live screen follows it"
         },
         t.dim(),
     )));
@@ -1010,22 +1058,7 @@ fn launch(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             t.fg(t.sel).bg(t.accent).add_modifier(Modifier::BOLD),
         ),
     ]));
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled("     Defaults from this repo's policy: tests must catch 70% of injected bugs · 2 test runs · 60 min budget", t.faint())));
-
-    let height = (lines.len() as u16 + 3).min(area.height);
-    let [form, _] = Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(area);
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(block(
-                t,
-                "new run",
-                "the workflow and policy are read from the base commit",
-                true,
-            )),
-        form,
-    );
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]
@@ -1168,6 +1201,11 @@ mod tests {
                 waited_s: 26,
                 wall_s: 126,
             },
+            produced: vec![Produced {
+                path: "answers/R9.md".into(),
+                lines: vec!["The balance is short because HALF_EVEN rounds 10.005 down.".into()],
+                total: 1,
+            }],
         };
         let mut app = App::from_source(Box::new(Reviewed(l, review)));
         app.go(Screen::Live);
@@ -1184,6 +1222,9 @@ mod tests {
             "failed before → passed after",
             "PASS AC1",
             "1 try · 394573 tokens · $1.14 · waited on people 26s · 2m06s so far",
+            "what it produced",
+            "answers/R9.md",
+            "HALF_EVEN rounds 10.005 down",
             "waiting for PO",
             "approve",
         ] {
@@ -1261,15 +1302,17 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_screen_asks_three_questions() {
+    fn the_launch_screen_asks_two_questions() {
         let mut app = App::demo();
         app.go(Screen::Launch);
         let s = render(&app, 140, 40);
         for want in [
-            "What kind of work?",
-            "What should it build?",
-            "Where should it run?",
+            "Which workflow?",
+            "(•) build",
+            "What should it work on?",
             "tickets/PTT-1240.md",
+            "a ticket path, or the task in your words",
+            "runs in a herdr tab",
             "Start run",
         ] {
             assert!(s.contains(want), "missing {want:?}\n{s}");

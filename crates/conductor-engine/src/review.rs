@@ -8,7 +8,8 @@ use crate::receipt::StageRecord;
 use crate::store::RunDir;
 use conductor_checks::gate::GateResult;
 use conductor_model::Verdict;
-use conductor_model::view::{Change, Cost, EvidenceRow, Review};
+use conductor_model::view::{Change, Cost, EvidenceRow, Produced, Review};
+use conductor_model::workflow::Workflow;
 use std::path::Path;
 use std::time::Duration;
 
@@ -163,10 +164,42 @@ pub fn cost(records: &[StageRecord], wall: Duration) -> Cost {
     }
 }
 
+/// How many lines of a produced file the review keeps.
+const PRODUCED_LINES: usize = 40;
+
+/// The declared outputs of the stages that ran, read from the worktree.
+pub fn produced(wf: &Workflow, wt: &Path, run_id: &str, records: &[StageRecord]) -> Vec<Produced> {
+    let mut out = Vec::new();
+    for s in &wf.stages {
+        if !records.iter().any(|r| r.stage == s.id && r.attempts > 0) {
+            continue;
+        }
+        for o in &s.outputs {
+            let path = wf.render(&o.path, run_id);
+            let Ok(text) = std::fs::read_to_string(wt.join(&path)) else {
+                continue;
+            };
+            let total = text.lines().count();
+            out.push(Produced {
+                path,
+                lines: text
+                    .lines()
+                    .take(PRODUCED_LINES)
+                    .map(str::to_owned)
+                    .collect(),
+                total,
+            });
+        }
+    }
+    out
+}
+
 /// Assembles the review for a pause at `stage`, from the stages recorded so far.
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     dir: &RunDir,
+    wf: &Workflow,
+    wt: &Path,
     run_id: &str,
     stage: &str,
     who: &str,
@@ -191,6 +224,7 @@ pub fn build(
         change: change(&patch, branch),
         evidence: evidence(records),
         cost: cost(records, wall),
+        produced: produced(wf, wt, run_id, records),
     }
 }
 

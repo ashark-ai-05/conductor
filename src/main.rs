@@ -756,6 +756,25 @@ impl conductor_tui::app::RunSource for RepoRuns {
     fn review(&self, run_id: &str) -> Option<conductor_model::view::Review> {
         conductor_engine::review::read(&self.0, run_id)
     }
+    fn workflows(&self) -> Vec<String> {
+        conductor_engine::launch::workflows(&self.0)
+    }
+    fn in_herdr(&self) -> bool {
+        std::env::var("HERDR_ENV").as_deref() == Ok("1") || herdr_handle().check_protocol().is_ok()
+    }
+    fn needs_ticket(&self, workflow: &str) -> bool {
+        std::fs::read_to_string(self.0.join(workflow))
+            .ok()
+            .and_then(|t| conductor_model::Workflow::parse(&t).ok())
+            .is_some_and(|wf| wf.needs_spec())
+    }
+    fn is_file(&self, input: &str) -> bool {
+        self.0.join(input).is_file()
+    }
+    fn start(&self, workflow: &str, input: &str) -> Result<String, String> {
+        let me = std::env::current_exe().map_err(|e| e.to_string())?;
+        conductor_engine::launch::start(&self.0, &me, workflow, input, self.in_herdr(), &[])
+    }
     fn answer(&self, run_id: &str, ask: u32, allowed: bool) -> Result<(), String> {
         let who = conductor_engine::live::read(&self.0, run_id)
             .and_then(|l| l.waiting)
@@ -797,11 +816,8 @@ fn ui(args: &[String]) -> Result<ExitCode> {
         let repo = repo_root()?;
         let src = RepoRuns(repo.clone());
         use conductor_tui::app::RunSource;
-        if src.receipts().is_empty() && src.running().is_empty() && run_id.is_none() {
-            bail!(
-                "no runs recorded in this repository yet; start one with `conductor run`, or try `conductor ui --demo`"
-            );
-        }
+        // Nothing recorded yet: the launch tab is the place to start.
+        let empty = src.receipts().is_empty() && src.running().is_empty() && run_id.is_none();
         let live = match &run_id {
             Some(id) => Some(
                 src.live(id)
@@ -813,6 +829,8 @@ fn ui(args: &[String]) -> Result<ExitCode> {
         if let Some(l) = live {
             app.live = l;
             app.go(conductor_tui::app::Screen::Live);
+        } else if empty {
+            app.go(conductor_tui::app::Screen::Launch);
         }
         app
     };
