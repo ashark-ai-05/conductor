@@ -517,6 +517,14 @@ impl Workflow {
     }
 
     /// Everything that can be decided about a workflow without running it.
+    /// Whether a check reads the ticket (`{{spec}}` in a command): such a workflow needs
+    /// one, and text alone is not enough.
+    pub fn needs_spec(&self) -> bool {
+        self.stages.iter().flat_map(|s| s.all_gates()).any(|g| {
+            matches!(g, Gate::CommandAssert { command, .. } if command.iter().any(|a| a.contains(SPEC)))
+        })
+    }
+
     pub fn validate(&self) -> Report {
         let mut r = Report::default();
 

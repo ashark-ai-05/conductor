@@ -762,6 +762,15 @@ impl conductor_tui::app::RunSource for RepoRuns {
     fn in_herdr(&self) -> bool {
         std::env::var("HERDR_ENV").as_deref() == Ok("1") || herdr_handle().check_protocol().is_ok()
     }
+    fn needs_ticket(&self, workflow: &str) -> bool {
+        std::fs::read_to_string(self.0.join(workflow))
+            .ok()
+            .and_then(|t| conductor_model::Workflow::parse(&t).ok())
+            .is_some_and(|wf| wf.needs_spec())
+    }
+    fn is_file(&self, input: &str) -> bool {
+        self.0.join(input).is_file()
+    }
     fn start(&self, workflow: &str, input: &str) -> Result<String, String> {
         let me = std::env::current_exe().map_err(|e| e.to_string())?;
         conductor_engine::launch::start(&self.0, &me, workflow, input, self.in_herdr(), &[])

@@ -94,6 +94,14 @@ pub trait RunSource {
     fn in_herdr(&self) -> bool {
         false
     }
+    /// Whether `workflow` needs a ticket file: one of its checks reads it.
+    fn needs_ticket(&self, _workflow: &str) -> bool {
+        false
+    }
+    /// Whether `input` names a file in the repository.
+    fn is_file(&self, _input: &str) -> bool {
+        false
+    }
     /// Starts a run of `workflow` on `input` (a ticket path if it names a file, else the
     /// task text) and returns its id once it exists.
     fn start(&self, _workflow: &str, _input: &str) -> Result<String, String> {
@@ -595,6 +603,23 @@ impl App {
                 Some("no workflow under .conductor/workflows/; `conductor init` writes one".into());
             return;
         };
+        // A workflow whose checks read the ticket cannot run on a sentence.
+        if let Some(src) = &self.source
+            && src.needs_ticket(&workflow)
+            && !src.is_file(&input)
+        {
+            let name = workflow
+                .rsplit('/')
+                .next()
+                .unwrap_or(&workflow)
+                .trim_end_matches(".yaml")
+                .to_owned();
+            self.status = Some(format!(
+                "`{name}` checks a ticket's acceptance criteria, so it needs a ticket file, not a sentence: give its path"
+            ));
+            self.launch.focus = 1;
+            return;
+        }
         let started = match &self.source {
             Some(src) => src.start(&workflow, &input),
             None => Err("starting runs is not available here".into()),
@@ -734,6 +759,12 @@ mod tests {
         fn in_herdr(&self) -> bool {
             true
         }
+        fn needs_ticket(&self, workflow: &str) -> bool {
+            workflow.ends_with("bugfix.yaml")
+        }
+        fn is_file(&self, input: &str) -> bool {
+            input.ends_with(".md")
+        }
         fn start(&self, workflow: &str, input: &str) -> Result<String, String> {
             self.0.borrow_mut().push((workflow.into(), input.into()));
             Ok("NEW1".into())
@@ -760,6 +791,12 @@ mod tests {
             fn in_herdr(&self) -> bool {
                 self.0.in_herdr()
             }
+            fn needs_ticket(&self, w: &str) -> bool {
+                self.0.needs_ticket(w)
+            }
+            fn is_file(&self, i: &str) -> bool {
+                self.0.is_file(i)
+            }
             fn start(&self, w: &str, i: &str) -> Result<String, String> {
                 self.0.start(w, i)
             }
@@ -772,6 +809,19 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(asked.0.borrow().is_empty());
         assert_eq!(app.launch.focus, 1);
+        // A sentence for a workflow that checks a ticket: refused with the reason.
+        for c in "what is the weather".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(asked.0.borrow().is_empty());
+        assert!(
+            app.status
+                .as_deref()
+                .unwrap()
+                .starts_with("`bugfix` checks a ticket's acceptance criteria")
+        );
+        app.launch.spec.clear();
         // Pick the second workflow, type the ticket, start.
         press(&mut app, KeyCode::Up);
         press(&mut app, KeyCode::Right);

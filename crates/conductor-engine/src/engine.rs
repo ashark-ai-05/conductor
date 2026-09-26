@@ -745,6 +745,11 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
         why,
     };
     let wf = Workflow::parse(&text).map_err(|e| invalid(e.to_string()))?;
+    if wf.needs_spec() && opts.spec_path.is_none() {
+        return Err(invalid(
+            "a check reads the ticket (`{{spec}}` in its command), so this workflow needs one: give it with --spec <file>, not -m".into(),
+        ));
+    }
     let report = wf.validate();
     if !report.is_ok() {
         let why = report
