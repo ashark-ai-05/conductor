@@ -575,11 +575,33 @@ fn review_screen(
         .map(|e| 1 + e.lines.len().min(4) as u16)
         .sum::<u16>()
         .max(1);
-    let [head, _, asks, _, changed, _, checks, _, cost, _, wait, _] = Layout::vertical([
+    let n_produced: u16 = r
+        .produced
+        .iter()
+        .map(|p| 1 + p.lines.len().min(16) as u16)
+        .sum();
+    let [
+        head,
+        _,
+        asks,
+        _,
+        made,
+        _,
+        changed,
+        _,
+        checks,
+        _,
+        cost,
+        _,
+        wait,
+        _,
+    ] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(n_criteria + 3),
         Constraint::Length(1),
+        Constraint::Length(if n_produced == 0 { 0 } else { n_produced + 3 }),
+        Constraint::Length(if n_produced == 0 { 0 } else { 1 }),
         Constraint::Length(1 + n_files + 3),
         Constraint::Length(1),
         Constraint::Length(n_checks + 3),
@@ -590,6 +612,33 @@ fn review_screen(
         Constraint::Min(0),
     ])
     .areas(area);
+
+    // What the stages produced: for a question, the answer itself.
+    if n_produced > 0 {
+        let mut lines: Vec<Line> = Vec::new();
+        for p in &r.produced {
+            lines.push(Line::from(vec![
+                Span::styled(p.path.clone(), t.bold()),
+                Span::styled(
+                    if p.total > 16 {
+                        format!("  first 16 of {} lines", p.total)
+                    } else {
+                        String::new()
+                    },
+                    t.faint(),
+                ),
+            ]));
+            for l in p.lines.iter().take(16) {
+                lines.push(Line::from(Span::styled(format!("  {l}"), t.text())));
+            }
+        }
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(block(t, "what it produced", "the agent's own words", false)),
+            made,
+        );
+    }
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -1152,6 +1201,11 @@ mod tests {
                 waited_s: 26,
                 wall_s: 126,
             },
+            produced: vec![Produced {
+                path: "answers/R9.md".into(),
+                lines: vec!["The balance is short because HALF_EVEN rounds 10.005 down.".into()],
+                total: 1,
+            }],
         };
         let mut app = App::from_source(Box::new(Reviewed(l, review)));
         app.go(Screen::Live);
@@ -1168,6 +1222,9 @@ mod tests {
             "failed before → passed after",
             "PASS AC1",
             "1 try · 394573 tokens · $1.14 · waited on people 26s · 2m06s so far",
+            "what it produced",
+            "answers/R9.md",
+            "HALF_EVEN rounds 10.005 down",
             "waiting for PO",
             "approve",
         ] {

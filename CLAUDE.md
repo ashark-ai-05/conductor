@@ -78,6 +78,22 @@ runs today).
 Worked means: the next three runs start from the TUI without a shell command.
 Stop means: a shell command is still faster and Krunal goes back to it.
 
+## Fourth scope card (ask a question), 2026-09-26
+
+Problem: Krunal, on the launch tab with a question typed ("what is the weather in
+melbourne today?"), had no workflow that takes a question; the only one checks a ticket.
+Evidence: his test of the tab on 2026-09-26. No incident at work yet; this card is weaker
+than the others and says so.
+Does: `ask.yaml` in the mock: one Claude stage answers into `answers/<run>.md` with what
+it looked at, the check is that the file exists, and a person says whether it is
+answered. The review screen shows what a stage produced, so the answer is read where the
+decision is made.
+Does not: grade the answer's claims (the spec's `adhoc` kind, not built); the receipt
+says the answer exists and who accepted it, never that it is right.
+Worked means: three questions asked from the tab whose answers Krunal accepted from the
+review screen, and one of them he could check against what it cited.
+Stop means: the answers are not worth the run's cost.
+
 ## Next, in order
 
 1. The three-ticket test ran on 2026-09-25 (`three-ticket-test.md`): 6 of 6 by Krunal's

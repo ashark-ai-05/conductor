@@ -574,6 +574,8 @@ stages:
   - id: write
     agent: { kind: script, command: ["sh", "-c", "mkdir -p notes && echo hello > notes/out.md"] }
     scope: { write: ["notes/**"] }
+    outputs:
+      - { id: note, path: notes/out.md, required: true }
     evidence: { to: "{{spec}}", files: ["notes/out.md"] }
     gates:
       - { type: scope }
@@ -687,6 +689,9 @@ stages:
     assert_eq!(grep.before, Some(Verdict::Failed));
     assert_eq!(grep.after, Verdict::Passed);
     assert_eq!(review.cost.tries, 1);
+    assert_eq!(review.produced.len(), 1);
+    assert_eq!(review.produced[0].path, "notes/out.md");
+    assert_eq!(review.produced[0].lines, vec!["hello"]);
     assert!(
         events.iter().any(|e| e
             .what

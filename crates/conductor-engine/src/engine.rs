@@ -943,6 +943,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                 .unwrap_or_else(|| opts.task.clone());
             let review = crate::review::build(
                 &dir,
+                &wf,
+                &wt,
                 &run_id,
                 &stage.id,
                 &who,
