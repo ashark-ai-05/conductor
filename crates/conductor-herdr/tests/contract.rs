@@ -131,3 +131,59 @@ fn a_server_error_comes_back_with_herdrs_code() {
     assert!(matches!(err, HerdrError::Server { .. }), "{err}");
     assert!(err.to_string().contains("not_found"), "{err}");
 }
+
+#[test]
+fn explicit_focus_and_attention_reports_do_not_change_the_other_pane() {
+    let Some(s) = Session::start("conductor-navigation") else {
+        return;
+    };
+    let h = s.herdr();
+    let dir = tempfile::tempdir().unwrap();
+    let (_, tab) = h.workspace_create("Review task", dir.path()).unwrap();
+    let agent = h
+        .pane_split(&tab.root_pane, Direction::Right, dir.path())
+        .unwrap();
+    let h = Herdr::with(&s.bin, Target::Socket(h.socket_path().unwrap()));
+    h.call(&[
+        "pane",
+        "report-agent",
+        &tab.root_pane,
+        "--source",
+        "custom:conductor",
+        "--agent",
+        "conductor",
+        "--state",
+        "blocked",
+    ])
+    .unwrap();
+    let status = h.call(&["pane", "get", &tab.root_pane]).unwrap();
+    assert_eq!(status["result"]["pane"]["agent_status"], "blocked");
+    h.focus_pane(&agent).unwrap();
+    assert_eq!(
+        h.call(&["pane", "get", &agent]).unwrap()["result"]["pane"]["focused"],
+        true
+    );
+    h.focus_pane(&tab.root_pane).unwrap();
+    assert_eq!(
+        h.call(&["pane", "get", &tab.root_pane]).unwrap()["result"]["pane"]["focused"],
+        true
+    );
+    assert_eq!(
+        h.call(&["pane", "get", &agent]).unwrap()["result"]["pane"]["agent_status"],
+        "unknown"
+    );
+    h.call(&[
+        "pane",
+        "release-agent",
+        &tab.root_pane,
+        "--source",
+        "custom:conductor",
+        "--agent",
+        "conductor",
+    ])
+    .unwrap();
+    assert_ne!(
+        h.call(&["pane", "get", &tab.root_pane]).unwrap()["result"]["pane"]["agent_status"],
+        "blocked"
+    );
+}

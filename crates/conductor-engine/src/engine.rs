@@ -788,7 +788,8 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
     let herdr_run = match std::mem::replace(&mut opts.mode, Mode::Headless) {
         Mode::Headless => None,
         Mode::Herdr(h) => {
-            let mut hr = crate::herdr_exec::HerdrRun::new(h, &run_id);
+            let mut hr = crate::herdr_exec::HerdrRun::new(h, &run_id)
+                .with_view(&opts.task, dir.root.join("herdr.json"));
             if let Some(a) = &actions_path {
                 hr = hr.with_agent_control(a.clone());
             }
@@ -1402,6 +1403,21 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
                     };
                 }
 
+                // Publish this completed attempt before a retry replaces its working tree.
+                // Patch and checks share the recorded stage/attempt, not the live checkout.
+                let mut attempt_record = stage_rec.clone();
+                attempt_record.finish(results.clone(), attempt);
+                attempt_record.verdict = first_bad
+                    .map(|i| results[i].verdict)
+                    .unwrap_or(Verdict::Passed);
+                let snapshot = dir.root.join("gates.next.json");
+                let visible: Vec<_> = records
+                    .iter()
+                    .chain(std::iter::once(&attempt_record))
+                    .collect();
+                dir.write_json(&snapshot, &visible)?;
+                std::fs::rename(snapshot, dir.gates())?;
+
                 match first_bad {
                     None => {
                         stage_verdict = Verdict::Passed;
@@ -1456,6 +1472,11 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
             ),
         );
         records.push(stage_rec);
+        // Publish completed stages before a later human review. Replace atomically so the
+        // task workspace never sees half a test report; final gates.json has the same shape.
+        let snapshot = dir.root.join("gates.next.json");
+        dir.write_json(&snapshot, &records)?;
+        std::fs::rename(snapshot, dir.gates())?;
         // Headless, nobody is watching a background pane: stop what the agent left running,
         // whether or not the stage passed.
         if let (None, Some(path)) = (&herdr_run, &actions_path) {
@@ -1543,7 +1564,9 @@ pub fn run(mut opts: Options) -> Result<Outcome, EngineError> {
 
     live.end(run_verdict);
     live.save(&rec);
-    dir.write_json(&dir.gates(), &records)?;
+    let snapshot = dir.root.join("gates.next.json");
+    dir.write_json(&snapshot, &records)?;
+    std::fs::rename(snapshot, dir.gates())?;
     let receipt = receipt::build(
         &wf,
         &run_id,

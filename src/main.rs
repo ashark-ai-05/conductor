@@ -3,11 +3,14 @@
 use anyhow::{Context, Result, bail};
 use conductor_engine::{Mode, Options, list_runs, read_receipt, verify};
 use conductor_model::{Event, Receipt, Verdict, Workflow};
-use conductor_tui::{app::App, theme::Theme};
+use conductor_tui::theme::Theme;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod capabilities;
+mod herdr_ui;
 mod setup;
+mod tasks;
 
 const USAGE: &str = "\
 conductor — agentic software work with receipts
@@ -38,9 +41,15 @@ usage:
   conductor trace [<run-id>] [--export]
                                      show a run's stages, attempts and checks as a
                                      trace; --export sends it over OTLP
-  conductor ui [--run <id>] [--demo] [--light]
-                                     open the terminal UI over this repository's runs,
-                                     including ones in progress
+  conductor ui [--run <id> | --ask | --tasks] [--repo <path>] [--demo] [--light]
+                                     ask a question or inspect a task with its result,
+                                     sources, evidence and activity
+  conductor capability list         discover native operations (no agent calls)
+  conductor capability add <id> <file> [--label <title>]
+                                     register a local JSON/text report
+  conductor capability run <id> | refresh <task-id> | show <task-id> | remove <id>
+                                     capture, refresh or inspect retained native output
+  conductor herdr ask|tasks|return  open Conductor or return to a task inside herdr
   conductor serve [--port <n>] [--bind <addr>] [--open]
                                      the same runs in a browser: each run as two lanes,
                                      what the agent did and what conductor witnessed,
@@ -82,6 +91,7 @@ fn real_main() -> Result<ExitCode> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
+        Some("capability") => capabilities::dispatch(&repo_root()?, &args[1..]),
         Some("init") => setup::init(&repo_root()?),
         Some("serve") => serve(&args[1..]),
         Some("doctor") => setup::doctor(&repo_root()?, herdr_handle()),
@@ -97,6 +107,16 @@ fn real_main() -> Result<ExitCode> {
         Some("deliver") => deliver_cmd(&args[1..]),
         Some("check-pr") => check_pr_cmd(&args[1..]),
         Some("ui") => ui(&args[1..]),
+        Some("herdr") => herdr_ui::dispatch(&args[1..]),
+        Some("question-worker") => {
+            let id = args.get(1).context("question-worker needs an id")?;
+            let turn = args
+                .get(2)
+                .context("question-worker needs a turn")?
+                .parse()?;
+            conductor_engine::question::work(&std::env::current_dir()?, id, turn)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Some("validate") => validate(&args[1..]),
         Some("pane") => pane(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
@@ -281,7 +301,9 @@ fn ensure_herdr_server(h: &conductor_herdr::Herdr) -> Result<()> {
 }
 
 fn herdr_handle() -> conductor_herdr::Herdr {
-    let bin = std::env::var("CONDUCTOR_HERDR_BIN").unwrap_or_else(|_| "herdr".into());
+    let bin = std::env::var("CONDUCTOR_HERDR_BIN")
+        .or_else(|_| std::env::var("HERDR_BIN_PATH"))
+        .unwrap_or_else(|_| "herdr".into());
     let target = match std::env::var("CONDUCTOR_HERDR_SESSION") {
         Ok(s) if !s.is_empty() => conductor_herdr::Target::Session(s),
         _ => conductor_herdr::Target::Current,
@@ -760,7 +782,7 @@ impl conductor_tui::app::RunSource for RepoRuns {
         conductor_engine::launch::workflows(&self.0)
     }
     fn in_herdr(&self) -> bool {
-        std::env::var("HERDR_ENV").as_deref() == Ok("1") || herdr_handle().check_protocol().is_ok()
+        std::env::var("HERDR_ENV").as_deref() == Ok("1")
     }
     fn needs_ticket(&self, workflow: &str) -> bool {
         std::fs::read_to_string(self.0.join(workflow))
@@ -800,41 +822,42 @@ fn ui(args: &[String]) -> Result<ExitCode> {
     let mut demo = false;
     let mut theme = Theme::DARK;
     let mut run_id: Option<String> = None;
+    let mut focused = false;
+    let mut tasks = false;
+    let mut repo = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--demo" => demo = true,
+            "--ask" => focused = true,
+            "--tasks" => tasks = true,
+            "--repo" => repo = Some(PathBuf::from(it.next().context("--repo needs a path")?)),
             "--light" => theme = Theme::LIGHT,
             "--dark" => theme = Theme::DARK,
             "--run" => run_id = Some(it.next().context("--run needs a run id")?.clone()),
             other => bail!("unknown option `{other}` for `conductor ui`"),
         }
     }
-    let app = if demo {
-        App::demo()
+    use conductor_tui::workspace::Workspace;
+    let mut app = if demo {
+        Workspace::demo()
     } else {
-        let repo = repo_root()?;
-        let src = RepoRuns(repo.clone());
-        use conductor_tui::app::RunSource;
-        // Nothing recorded yet: the launch tab is the place to start.
-        let empty = src.receipts().is_empty() && src.running().is_empty() && run_id.is_none();
-        let live = match &run_id {
-            Some(id) => Some(
-                src.live(id)
-                    .with_context(|| format!("no run `{id}` in this repository"))?,
-            ),
-            None => None,
-        };
-        let mut app = App::from_source(Box::new(src));
-        if let Some(l) = live {
-            app.live = l;
-            app.go(conductor_tui::app::Screen::Live);
-        } else if empty {
-            app.go(conductor_tui::app::Screen::Launch);
-        }
-        app
+        Workspace::new(std::sync::Arc::new(RepoRuns(
+            repo.unwrap_or(repo_root().unwrap_or(std::env::current_dir()?)),
+        )))
     };
-    conductor_tui::run(app, theme)?;
+    app.focused = focused || run_id.is_some();
+    if tasks {
+        app.input = None;
+        app.list_focus = true;
+    }
+    if let Some(id) = run_id
+        && !app.open(&id)
+    {
+        bail!("no task `{id}` in this repository");
+    }
+    app.tick();
+    conductor_tui::run_workspace(app, theme)?;
     Ok(ExitCode::SUCCESS)
 }
 

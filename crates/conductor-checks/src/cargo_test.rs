@@ -5,10 +5,10 @@
 //! the JSON lines say whether the build succeeded, and the text says what each test did and,
 //! for a failure, why it panicked.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Passed,
@@ -17,7 +17,7 @@ pub enum Outcome {
 }
 
 /// Why a test failed. This is what "red for the right reason" is decided from (SPEC §9.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     /// An assertion about the code's behaviour did not hold.
@@ -54,7 +54,7 @@ impl FailureKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestCase {
     pub name: String,
     pub outcome: Outcome,
@@ -64,18 +64,20 @@ pub struct TestCase {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestReport {
     /// `None` when cargo never said whether the build finished.
     pub compiled: Option<bool>,
     pub compile_errors: usize,
     /// The compiler's first few error messages, one line each, for the agent's next try.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub compile_messages: Vec<String>,
     pub tests: Vec<TestCase>,
     /// The report files the results were read from, each with its hash (JUnit only; cargo's
     /// output is the command's stdout, hashed with the execution).
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub report_files: Vec<String>,
 }
 

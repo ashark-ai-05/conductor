@@ -5,9 +5,13 @@
 //! pure functions that decide things about it, which is what lets a verdict be re-derived
 //! from stored evidence with zero model calls.
 
+pub mod capability;
+pub mod interaction;
+
 pub mod demo;
 pub mod evidence;
 pub mod receipt;
+pub mod task;
 pub mod view;
 pub mod workflow;
 

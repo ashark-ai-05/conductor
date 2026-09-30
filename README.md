@@ -11,6 +11,17 @@ in a receipt that says what was proven, by which check, and what was not checked
 
 ## Try it
 
+For a question or to inspect work in the terminal, run `cargo run -- ui`. Type your
+question and press Enter; Sources and Activity stay beside its answer. `n` starts a
+question, `w` starts a configured workflow, and `Tab` opens the task list. Questions use
+your authenticated Claude CLI with web tools and do not create a worktree or require
+approval. [Workspace controls and scope](docs/task-workspace.md).
+
+`cargo run -- ui --demo` previews weather facts, a city comparison, a forecast and a QA
+test report with illustrative data and no model calls. Use `Tab`, arrows and Enter to
+switch tasks. In a result, arrows select a fact or row; Enter opens its supporting
+sources or test evidence. `v` switches between the result layout and complete text.
+
 ```bash
 cargo install --path .
 cd your-project
@@ -92,13 +103,13 @@ is nothing to collect afterwards: the checks failing before the fix, each check 
 output after it, the change itself, and the files the stage names. Only conductor writes
 there; an agent that changes the ticket fails the attempt and its words are dropped. The
 decision lands there too, and it needs a note saying what was checked. Decide from the run's
-page in `conductor serve`, with `y` / `n` in `conductor ui`, or with
+page in `conductor serve`, with `y` / `d` in `conductor ui`, or with
 `conductor approve <run> --by PO -m "…"` and `conductor reject`.
 
 What the agent does is on the record as it happens, so a person watching can tell working
 from stuck. A tool the agent asks for that is outside `allowed_tools` is put to a person:
 the stage's `who`, else whoever started the run. The question shows the moment it is asked,
-on the run's page, in `conductor ui` (`y` / `n`), and for `conductor allow <run>` /
+on the run's page, in `conductor ui` (`y` / `d`), and for `conductor allow <run>` /
 `conductor deny <run> -m "…"`. The agent waits, and the stage clock stops with it; the
 answer and the time spent waiting are on the record. Nobody answering within a day is a
 deny in nobody's name.
@@ -183,3 +194,53 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace   # set CONDUCTOR_HERDR_BIN to include the tests against real herdr
 ```
+
+### In Herdr
+
+Build with `cargo build --release --locked`, then run `herdr plugin link /absolute/path/to/conductor`
+from your Herdr session. The plugin adds **Ask Conductor**, **Open project tasks**, and
+**Return to Conductor task**. Run views use the full pane; `Tab` opens the task drawer
+and `g` visits the agent. See [the task workspace guide](docs/task-workspace.md#herdr-integration).
+
+### Native operations and dynamic report sources
+
+Open **Actions** with `Ctrl+K` from the request composer or any task. The drawer loads
+currently registered capabilities; `r` reloads it after registration changes. Enter
+runs the selected operation. **Repository changes** is available without setup and
+captures Git status with no model call.
+
+Register any JSON or text report inside the project under a name you choose:
+
+```sh
+conductor capability add qa.failures examples/capabilities/failures.json --label 'QA failures (sample)'
+conductor capability list
+conductor capability run qa.failures
+# Use the printed task ID:
+conductor ui --run n-...
+```
+
+The sample contains illustrative records, not the results of tests run against this
+repository. Use a real local report file for your own data. JSON records use the existing
+table, objects use labelled values, and other shapes or text retain a readable full
+payload. Source content cannot create commands, widgets or verified check results.
+
+In a native task, `r` captures another attempt, Enter inspects the selected result's
+saved evidence, `a` shows activity, and `v` shows the full payload. Refresh does not
+start an agent. A failed read retains the last successful result with its original
+capture time. All attempts are retained under `.conductor/native-tasks/`.
+
+```sh
+conductor capability refresh n-...
+conductor capability show n-...        # reads the saved record; never reruns it
+conductor capability remove qa.failures
+```
+
+Removing a capability leaves its results readable. Changing its descriptor invalidates
+old task bindings; start a new task from Actions to use the new definition. Registrations
+are stored in `.conductor/capabilities/`. Names are data rather than a hardcoded list of
+business tasks. This first slice includes native Git status and selected-file adapters;
+Jira/CI connections, autonomous plan composition and generated-program execution are
+not implemented yet. Existing questions and workflow runs remain available.
+
+Reports are limited to 64 KiB of UTF-8 text per capture and 32 attempts per native task.
+Captured hashes identify payloads; these records are not signed or Git-anchored receipts.

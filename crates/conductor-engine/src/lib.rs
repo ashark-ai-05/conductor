@@ -3,6 +3,8 @@
 //! No model calls happen here. Agents are driven through [`executor`]s; every decision about
 //! what happens next is a rule over recorded facts.
 
+pub mod capabilities;
+
 pub mod agent_panes;
 pub mod ask;
 pub mod decision;
@@ -16,6 +18,7 @@ pub mod live;
 pub mod local_panes;
 pub mod metrics;
 pub mod otlp;
+pub mod question;
 pub mod receipt;
 pub mod review;
 pub mod store;
@@ -157,3 +160,5 @@ pub fn list_runs(repo: &Path) -> Vec<String> {
     ids.reverse();
     ids
 }
+
+pub mod test_results;

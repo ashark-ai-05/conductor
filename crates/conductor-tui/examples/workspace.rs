@@ -1,0 +1,79 @@
+//! Render the actual workspace through Ratatui's test backend, for layout review.
+use conductor_tui::{
+    theme::Theme,
+    workspace::{self, Panel, Workspace},
+};
+use ratatui::{Terminal, backend::TestBackend};
+fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    let width = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(140);
+    let height = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(32);
+    let mut app = Workspace::demo();
+    if args.iter().any(|s| s == "clarify") {
+        app.open("q-clarification");
+    }
+    if args.iter().any(|s| s == "comparison") {
+        app.open("q-comparison");
+    }
+    if args.iter().any(|s| s == "forecast") {
+        app.open("q-forecast");
+    }
+    if args.iter().any(|s| s == "tests") {
+        app.open("test-demo");
+    }
+    if args.iter().any(|s| s == "bug") {
+        app.open("bug-demo");
+    }
+    if args.iter().any(|s| s == "patch") {
+        app.change_focus = true;
+    }
+    app.panel = match args.get(3).map(String::as_str) {
+        Some("sources") => Some(Panel::Sources),
+        Some("activity") => Some(Panel::Activity),
+        _ => None,
+    };
+    if let Some(index) = args.iter().position(|a| a == "--question") {
+        let path = args
+            .get(index + 1)
+            .expect("--question requires a saved question.json");
+        let question: conductor_model::task::Question =
+            serde_json::from_slice(&std::fs::read(path).expect("read saved question"))
+                .expect("parse saved question");
+        let mut detail = workspace::demo_task();
+        detail.summary.id = question.id.clone();
+        detail.summary.title = question.title.clone();
+        detail.summary.state = question
+            .turns
+            .last()
+            .map(|t| t.state)
+            .unwrap_or(conductor_model::task::State::Stopped);
+        app.turn = question.turns.len().saturating_sub(1);
+        detail.question = Some(question);
+        app.detail = Some(detail);
+        app.demo = false;
+    }
+    app.focused = args.iter().any(|s| s == "focused");
+    app.expanded = args.iter().any(|s| s == "expanded");
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|f| workspace::draw(f, &app, &Theme::DARK))
+        .unwrap();
+    let b = terminal.backend().buffer();
+    if args.iter().any(|a| a == "--json") {
+        let rows:Vec<_>=(0..height).map(|y|(0..width).map(|x| {
+            let c=&b[(x,y)];
+            serde_json::json!({"text":c.symbol(),"fg":format!("{:?}",c.fg),"bg":format!("{:?}",c.bg),"modifiers":format!("{:?}",c.modifier)})
+        }).collect::<Vec<_>>()).collect();
+        println!(
+            "{}",
+            serde_json::json!({"width":width,"height":height,"rows":rows})
+        );
+        return;
+    }
+    for y in 0..height {
+        println!(
+            "{}",
+            (0..width).map(|x| b[(x, y)].symbol()).collect::<String>()
+        );
+    }
+}

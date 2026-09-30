@@ -94,7 +94,22 @@ Worked means: three questions asked from the tab whose answers Krunal accepted f
 review screen, and one of them he could check against what it cited.
 Stop means: the answers are not worth the run's cost.
 
+## Clarification scope approved 2026-09-27
+
+Krunal's FDE clarification screenshot establishes the current interaction problem.
+Single-choice input, a custom answer, optional context, and bound continuation in the
+same direct-question task are approved. See `docs/task-workspace.md`. Approval gates,
+workflow-stage inputs and arbitrary generated controls are outside this slice.
+
 ## Next, in order
+
+The task workspace scope approved by Krunal on 2026-09-26 supersedes the launch-tab
+and question-review UI cards above. See `docs/task-workspace.md`: direct questions,
+durable answers/follow-ups, Sources and Activity, and existing build review in the
+same workspace. Dedicated BA/QA/ops execution and automatic revision loops remain later.
+Krunal's follow-up approval also covers structured result views: key facts, comparison
+tables and reports from existing engine-parsed tests. See the result-view scope in the
+same document. This adds presentation, not new workflow execution or a classifier service.
 
 1. The three-ticket test ran on 2026-09-25 (`three-ticket-test.md`): 6 of 6 by Krunal's
    reading, and its last column was built the same day. Not yet seen by a PO. Next: show a

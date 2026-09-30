@@ -1,2 +1,4 @@
 /target
 .conductor/runs/
+.conductor/questions/
+.conductor/native-tasks/

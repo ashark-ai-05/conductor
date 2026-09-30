@@ -125,6 +125,7 @@ pub fn couples_to_parent_session(key: &str) -> bool {
 pub enum Ended {
     Exited,
     TimedOut,
+    Cancelled,
     /// The command never started, or conductor lost track of it. Nothing was witnessed.
     NotRun,
 }
@@ -248,14 +249,14 @@ fn capture(mut stream: impl Read, keep_all: bool, lines: Option<mpsc::Sender<Str
 }
 
 pub fn run(spec: &Spec) -> Execution {
-    run_impl(spec, None, None)
+    run_impl(spec, None, None, None)
 }
 
 /// Like [`run`], and `on_line` sees each line of stdout as the command writes it, so a
 /// long-running agent can be watched. Everything else, the hashes, the timeout, the
 /// group kill, is the same.
 pub fn run_streaming(spec: &Spec, on_line: &mut dyn FnMut(&str)) -> Execution {
-    run_impl(spec, Some(on_line), None)
+    run_impl(spec, Some(on_line), None, None)
 }
 
 /// Like [`run_streaming`], and `paused` is asked on every tick of the wait whether the
@@ -266,7 +267,16 @@ pub fn run_pausable(
     on_line: &mut dyn FnMut(&str),
     paused: &mut dyn FnMut() -> bool,
 ) -> Execution {
-    run_impl(spec, Some(on_line), Some(paused))
+    run_impl(spec, Some(on_line), Some(paused), None)
+}
+
+/// A user cancellation stops the process group, using the same bounded cleanup as a timeout.
+pub fn run_cancellable(
+    spec: &Spec,
+    on_line: &mut dyn FnMut(&str),
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Execution {
+    run_impl(spec, Some(on_line), None, Some(cancelled))
 }
 
 /// How often the wait loop looks for new lines.
@@ -276,6 +286,7 @@ fn run_impl(
     spec: &Spec,
     mut on_line: Option<&mut dyn FnMut(&str)>,
     mut paused: Option<&mut dyn FnMut() -> bool>,
+    mut cancelled: Option<&mut dyn FnMut() -> bool>,
 ) -> Execution {
     let Some(program) = spec.argv.first().filter(|p| !p.trim().is_empty()) else {
         return Execution::not_run(spec.argv, "the command is empty".into());
@@ -342,6 +353,13 @@ fn run_impl(
     let mut paused_for = Duration::ZERO;
     let mut last_tick = Instant::now();
     let (ended, exit_code, mut reason) = loop {
+        if cancelled.as_mut().is_some_and(|c| c()) {
+            let _ = killpg(group, Signal::SIGTERM);
+            let _ = exited.recv_timeout(GRACE);
+            // A descendant may remain even after its parent exits.
+            let _ = killpg(group, Signal::SIGKILL);
+            break (Ended::Cancelled, None, Some("cancelled by you".into()));
+        }
         if let Some(f) = &mut on_line {
             while let Ok(l) = line_rx.try_recv() {
                 f(&l);

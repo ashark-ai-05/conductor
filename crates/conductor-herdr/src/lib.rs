@@ -1,7 +1,7 @@
 //! The one place conductor talks to herdr (SPEC §11.1–11.2).
 //!
-//! Everything goes through herdr's CLI, which herdr's own agent skill names as the authority
-//! on syntax, and every id is read from herdr's JSON responses rather than predicted. The
+//! Commands use herdr's CLI, except absolute pane focus, which uses its socket API.
+//! Every id is read from herdr's JSON responses rather than predicted. The
 //! adapter remembers which tabs and panes it created and refuses to close anything else:
 //! conductor never touches a pane that belongs to a person or another run.
 //!
@@ -11,6 +11,8 @@
 
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -124,6 +126,55 @@ impl Herdr {
 
     pub fn target(&self) -> &Target {
         &self.target
+    }
+
+    /// Resolve the exact server once; stored pane IDs only make sense on that server.
+    pub fn socket_path(&self) -> Result<PathBuf, HerdrError> {
+        if let Target::Socket(path) = &self.target {
+            return Ok(path.clone());
+        }
+        let v = self.call(&["status", "--json"])?;
+        v.pointer("/server/socket")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| HerdrError::Shape {
+                args: "status --json".into(),
+                detail: "no server socket path".into(),
+            })
+    }
+
+    /// Protocol 22 supports absolute focus; its CLI only exposes directional pane focus.
+    /// This is an explicit navigation action, never called while refreshing a view.
+    pub fn focus_pane(&self, pane: &str) -> Result<(), HerdrError> {
+        let args = "pane.focus";
+        let request = serde_json::json!({
+            "id": "conductor:focus", "method": args, "params": {"pane_id": pane}
+        });
+        let mut socket = UnixStream::connect(self.socket_path()?).map_err(HerdrError::Missing)?;
+        let timeout = Some(std::time::Duration::from_secs(3));
+        socket
+            .set_read_timeout(timeout)
+            .map_err(HerdrError::Missing)?;
+        socket
+            .set_write_timeout(timeout)
+            .map_err(HerdrError::Missing)?;
+        writeln!(socket, "{request}").map_err(HerdrError::Missing)?;
+        let mut response = String::new();
+        BufReader::new(socket)
+            .take(65536)
+            .read_line(&mut response)
+            .map_err(HerdrError::Missing)?;
+        let value: Value = serde_json::from_str(&response).map_err(|e| HerdrError::Shape {
+            args: args.into(),
+            detail: e.to_string(),
+        })?;
+        if value.get("id") != request.get("id") || value.get("result").is_none() {
+            return Err(HerdrError::Server {
+                args: args.into(),
+                message: error_message(&value).unwrap_or_else(|| value.to_string()),
+            });
+        }
+        Ok(())
     }
 
     fn command(&self) -> Command {

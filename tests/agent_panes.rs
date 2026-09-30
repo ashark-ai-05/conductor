@@ -164,13 +164,13 @@ stages:
             .output()
             .unwrap();
         screen = String::from_utf8_lossy(&o.stdout).into_owned();
-        if screen.contains("the run passed") || screen.contains("every check passed") {
+        if screen.contains("Finished") && screen.contains("2 of 2 checks passed") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     assert!(
-        screen.contains("every check passed"),
+        screen.contains("Finished") && screen.contains("2 of 2 checks passed"),
         "the status pane shows the finished run:\n{screen}"
     );
     assert!(said("observed", "agent opened pane "), "{stdout}");

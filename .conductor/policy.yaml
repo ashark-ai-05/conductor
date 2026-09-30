@@ -1,0 +1,10 @@
+# Repository policy, read from the commit a run starts at.
+#
+# Paths no agent may change, in any workflow. conductor always protects its own config
+# (.conductor/*.yaml, .conductor/workflows/**, .conductor/prompts/**) and .github/**.
+protected: []
+
+# Files build tools rewrite, which any stage may change. They are listed on the receipt as
+# not reviewed. Leave unset for the usual lockfiles (Cargo.lock, package-lock.json, …);
+# `generated: []` allows none.
+# generated: [Cargo.lock]

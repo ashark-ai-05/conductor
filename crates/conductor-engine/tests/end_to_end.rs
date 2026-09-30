@@ -120,6 +120,27 @@ fn a_run_retries_fresh_after_failing_tests_and_passes_with_a_verifiable_receipt(
     let d = repo(WRONG_THEN_RIGHT);
     let out = run(options(d.path())).expect("run completes");
     assert_eq!(out.verdict, Verdict::Passed, "{:#?}", out.receipt);
+    let mut evidence = vec![];
+    let cases = conductor_engine::test_results::read(&out.dir, &mut evidence).unwrap();
+    assert_eq!(
+        cases.cases.len(),
+        4,
+        "Two cases in the red stage, two after the fix; reruns are not duplicate cases"
+    );
+    assert_eq!(
+        cases
+            .cases
+            .iter()
+            .filter(|c| c.stage == "implement" && c.outcome == "Passed")
+            .count(),
+        2
+    );
+    assert!(cases.notices.iter().any(|n| n.contains("all reruns")));
+    assert!(
+        evidence
+            .iter()
+            .any(|(_, detail)| detail.contains("cargo test"))
+    );
 
     let claims: Vec<&str> = out
         .receipt
@@ -612,6 +633,13 @@ stages:
                 assert_eq!(w.who, "QA");
                 assert_eq!(w.question.trim(), "Approve if AC1 is shown.");
                 let dir = conductor_engine::store::RunDir::for_run(&repo, id);
+                let gates: serde_json::Value = serde_json::from_slice(
+                    &fs::read(dir.gates())
+                        .expect("completed gates available before human decision"),
+                )
+                .unwrap();
+                assert_eq!(gates[0]["stage"], "write");
+                assert!(!gates[0]["gates"].as_array().unwrap().is_empty());
                 conductor_engine::decision::write(
                     &dir,
                     &w.stage,

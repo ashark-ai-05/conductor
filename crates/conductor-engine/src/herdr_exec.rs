@@ -15,6 +15,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
+/// Full opaque IDs and their server, for navigation from a reopened task view.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct Binding {
+    pub socket: PathBuf,
+    pub tab: String,
+    pub status: Option<String>,
+    pub stages: BTreeMap<String, String>,
+    pub current: Option<String>,
+}
+
+impl Binding {
+    pub fn read(repo: &Path, id: &str) -> Option<Self> {
+        let path = crate::store::RunDir::for_run(repo, id)
+            .root
+            .join("herdr.json");
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
+}
+
 /// herdr state shared by every stage of one run.
 pub struct HerdrRun {
     pub herdr: Herdr,
@@ -22,6 +41,8 @@ pub struct HerdrRun {
     state: Mutex<RunPanes>,
     /// The run's agent action log, when agents may control panes in the run's tab.
     actions: Option<PathBuf>,
+    binding_path: Option<PathBuf>,
+    title: Option<String>,
 }
 
 #[derive(Default)]
@@ -78,6 +99,44 @@ impl HerdrRun {
             run_id: run_id.to_owned(),
             state: Mutex::new(RunPanes::default()),
             actions: None,
+            binding_path: None,
+            title: None,
+        }
+    }
+
+    /// Navigation metadata is a disposable view, separate from the evidence chain.
+    pub fn with_view(mut self, title: &str, path: PathBuf) -> Self {
+        self.title = Some(crate::live::title(title));
+        self.binding_path = Some(path);
+        self
+    }
+
+    fn save_binding(&self, st: &RunPanes) {
+        let (Some(path), Some(tab)) = (&self.binding_path, &st.tab) else {
+            return;
+        };
+        let Ok(socket) = self.herdr.socket_path() else {
+            return;
+        };
+        let binding = Binding {
+            socket,
+            tab: tab.tab_id.clone(),
+            status: st.status.clone(),
+            stages: st
+                .stages
+                .iter()
+                .map(|(stage, (pane, _))| (stage.clone(), pane.clone()))
+                .collect(),
+            current: st
+                .last_pane
+                .clone()
+                .filter(|p| st.stages.values().any(|v| &v.0 == p)),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&binding) {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, bytes).is_ok() {
+                let _ = std::fs::rename(tmp, path);
+            }
         }
     }
 
@@ -163,11 +222,15 @@ impl HerdrRun {
                 None => self.herdr.workspace_create("conductor", cwd)?.0,
             },
         };
-        let label = format!("run {}", self.run_id);
+        let label = self
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("run {}", self.run_id));
         let tab = self.herdr.tab_create(&ws, &label, cwd)?;
         st.workspace = Some(ws);
         st.tab = Some(tab.clone());
         st.free = Some(tab.root_pane.clone());
+        self.save_binding(&st);
         Ok(tab)
     }
 
@@ -192,6 +255,7 @@ impl HerdrRun {
         }
         st.status = Some(pane.clone());
         st.last_pane = Some(pane.clone());
+        self.save_binding(&st);
         Ok(pane)
     }
 
@@ -228,6 +292,16 @@ impl HerdrRun {
         };
         st.last_pane = Some(pane.clone());
         st.stages.insert(stage.to_owned(), (pane.clone(), None));
+        let _ = self.herdr.call(&[
+            "pane",
+            "report-metadata",
+            &pane,
+            "--source",
+            "custom:conductor",
+            "--token",
+            &format!("conductor_run={}", self.run_id),
+        ]);
+        self.save_binding(&st);
         Ok(pane)
     }
 
@@ -253,14 +327,18 @@ impl HerdrRun {
         };
         if st.stages.is_empty() && st.free.is_none() && st.status.is_none() {
             st.free = Some(pane);
+            self.save_binding(&st);
             return PaneOutcome::Kept;
         }
         if self.herdr.pane_close(&pane).is_err() {
+            st.stages.insert(stage.to_owned(), (pane, None));
+            self.save_binding(&st);
             return PaneOutcome::CloseFailed;
         }
         if st.last_pane.as_deref() == Some(pane.as_str()) {
             st.last_pane = None;
         }
+        self.save_binding(&st);
         PaneOutcome::Closed
     }
 
@@ -339,7 +417,17 @@ fn quote(s: &str) -> String {
 
 fn run_script(h: &Herdr, pane: &str, b: &Brief, env: &[(String, String)]) -> AgentRun {
     let started = Instant::now();
-    let nonce = format!("{}{}", b.attempt, std::process::id());
+    // A pane may be reused by another stage. Its previous sentinel must never finish
+    // the next stage before that command has actually run.
+    let nonce = format!(
+        "{}{}{}",
+        b.attempt,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
     let cmd = b
         .agent
         .command

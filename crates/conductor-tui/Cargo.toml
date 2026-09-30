@@ -8,7 +8,14 @@ publish = false
 [dependencies]
 conductor-model.workspace = true
 crossterm.workspace = true
-ratatui.workspace = true
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
+
+pulldown-cmark = { version = "0.13.4", default-features = false }
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

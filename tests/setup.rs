@@ -65,7 +65,7 @@ fn init_sets_up_a_rust_repository_once_and_keeps_what_is_there() {
     }
     assert_eq!(
         fs::read_to_string(d.path().join(".gitignore")).unwrap(),
-        "/target\n/.conductor/runs/\n"
+        "/target\n/.conductor/runs/\n/.conductor/questions/\n"
     );
     let v = conductor(d.path(), &["validate", ".conductor/workflows/build.yaml"]);
     assert!(v.status.success(), "{}", text(&v));
@@ -108,7 +108,10 @@ fn init_starts_any_project_on_junit_and_says_what_to_fill_in() {
     assert!(t.contains("found    JavaScript (jest)"), "{t}");
     assert!(t.contains("npm i -D jest-junit"), "{t}");
     let ignore = fs::read_to_string(d.path().join(".gitignore")).unwrap();
-    assert_eq!(ignore, "/.conductor/runs/\n/junit.xml\n");
+    assert_eq!(
+        ignore,
+        "/.conductor/runs/\n/.conductor/questions/\n/junit.xml\n"
+    );
     let wf = fs::read_to_string(d.path().join(".conductor/workflows/build.yaml")).unwrap();
     assert!(wf.contains(r#"setup: [["npm", "install"]]"#), "{wf}");
 }

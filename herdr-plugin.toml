@@ -1,0 +1,39 @@
+id = "conductor.tasks"
+name = "Conductor"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Questions, workflow results and human decisions in your project"
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["cargo", "build", "--release", "--locked"]
+
+[[actions]]
+id = "ask"
+title = "Ask Conductor"
+contexts = ["pane", "workspace"]
+command = ["target/release/conductor", "herdr", "ask"]
+
+[[actions]]
+id = "tasks"
+title = "Open project tasks"
+contexts = ["pane", "workspace"]
+command = ["target/release/conductor", "herdr", "tasks"]
+
+[[actions]]
+id = "return"
+title = "Return to Conductor task"
+contexts = ["pane"]
+command = ["target/release/conductor", "herdr", "return"]
+
+[[panes]]
+id = "ask"
+title = "Ask Conductor"
+placement = "overlay"
+command = ["target/release/conductor", "herdr", "show-ask"]
+
+[[panes]]
+id = "tasks"
+title = "Conductor tasks"
+placement = "tab"
+command = ["target/release/conductor", "herdr", "show-tasks"]
