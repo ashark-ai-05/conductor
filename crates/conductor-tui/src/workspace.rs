@@ -18,7 +18,9 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph, Wrap,
+    },
 };
 use std::sync::{Arc, mpsc};
 
@@ -128,6 +130,13 @@ pub struct Workspace {
     pub demo: bool,
     clarification: Option<clarification::Draft>,
     pending: Option<mpsc::Receiver<Result<String, String>>>,
+    /// Animation clock, advanced by the event loop while something on screen is moving.
+    pub frame: usize,
+    /// Activity steps on screen, how many of them were there before the last arrival, and
+    /// the frame of that arrival: a new step fades in.
+    shown: usize,
+    seen: usize,
+    seen_at: usize,
 }
 
 impl Workspace {
@@ -173,6 +182,10 @@ impl Workspace {
             demo: false,
             clarification: None,
             pending: None,
+            frame: 0,
+            shown: 0,
+            seen: 0,
+            seen_at: 0,
         }
     }
 
@@ -224,6 +237,10 @@ impl Workspace {
             demo: true,
             clarification: None,
             pending: None,
+            frame: 0,
+            shown: 0,
+            seen: 0,
+            seen_at: 0,
         }
     }
 
@@ -285,6 +302,8 @@ impl Workspace {
         self.selection_detail = None;
         self.status = None;
         self.record_snapshot = None;
+        self.shown = self.activity().len();
+        self.seen = self.shown;
         self.sync_clarification();
         true
     }
@@ -325,18 +344,6 @@ impl Workspace {
                 .unwrap_or(0);
             if let Some(d) = &self.detail {
                 let latest = src.task(&d.summary.id);
-                if let Some(latest) = &latest {
-                    // Keep an expanded activity entry anchored while new events arrive.
-                    if self.panel == Some(Panel::Activity) && self.expanded {
-                        let new_len = latest
-                            .question
-                            .as_ref()
-                            .and_then(|q| q.turns.get(self.turn))
-                            .map(|t| t.activity.len())
-                            .unwrap_or(latest.activity.len());
-                        self.item += new_len.saturating_sub(self.activity().len());
-                    }
-                }
                 if let Some(next) = &latest
                     && let Some(selected) = d.tests.as_ref().and_then(|r| {
                         r.cases
@@ -393,6 +400,12 @@ impl Workspace {
             }
         }
         self.sync_clarification();
+        let steps = self.activity().len();
+        if steps > self.shown {
+            self.seen = self.shown;
+            self.seen_at = self.frame;
+        }
+        self.shown = steps;
         if let Some(view) = self.result_view() {
             self.result_row = self.result_row.min(view.rows.len().saturating_sub(1));
         }
@@ -407,6 +420,22 @@ impl Workspace {
         } else if let Some(host) = &mut self.host {
             host.publish("", "Conductor", State::Answered);
         }
+    }
+
+    /// Whether anything on screen is moving: a spinner turns or a step has just arrived.
+    pub fn animating(&self) -> bool {
+        self.pending.is_some() || self.working() || self.fresh(self.shown.saturating_sub(1))
+    }
+    pub fn advance(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+    fn working(&self) -> bool {
+        self.current_turn()
+            .is_some_and(|turn| turn.state == State::Working)
+    }
+    /// A step that arrived within the last few frames.
+    fn fresh(&self, index: usize) -> bool {
+        index >= self.seen && index < self.shown && self.frame.wrapping_sub(self.seen_at) < 6
     }
 
     pub fn clarification_request(&self) -> Option<(InputBinding, InputRequest)> {
@@ -757,7 +786,12 @@ impl Workspace {
         if self.panel == Some(Panel::Record) {
             self.record_snapshot = Some(workbench::record(self));
         }
-        self.item = 0;
+        // Steps read oldest first; the newest is the one worth opening.
+        self.item = if self.panel == Some(Panel::Activity) {
+            self.activity().len().saturating_sub(1)
+        } else {
+            0
+        };
         self.expanded = self.panel == Some(Panel::Record)
             || self.panel == Some(Panel::Sources) && self.items() == 1;
         self.panel_scroll = 0;
@@ -842,7 +876,8 @@ impl Workspace {
             let _ = tx.send(result);
         });
         self.pending = Some(rx);
-        self.status = Some("Starting…".into());
+        // The footer says it is starting; a status row here would push the request box up.
+        self.status = None;
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -1360,13 +1395,288 @@ pub(crate) fn line(text: impl Into<String>, style: Style) -> Line<'static> {
 }
 fn state_style(t: &Theme, state: State) -> Style {
     t.fg(match state {
-        State::Working => t.accent,
+        State::Working => t.run,
         State::Stopped => t.fail,
         State::NeedsInput => t.warn,
         State::Cancelled => t.dim,
-        State::Answered => t.accent,
         _ => t.pass,
     })
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+fn spinner(frame: usize) -> &'static str {
+    SPINNER[frame % SPINNER.len()]
+}
+
+/// A bordered pane. Only the pane that takes the arrow keys is drawn in the accent colour.
+pub(crate) fn pane<'a>(t: &Theme, title: &str, focused: bool) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .padding(Padding::horizontal(1))
+        .border_style(t.fg(if focused { t.accent } else { t.line }))
+        .title(format!(" {} ", clean(title)))
+        .title_style(if focused { t.fg(t.accent) } else { t.dim() })
+}
+
+/// The tab the side pane shows while the answer has the focus: the steps during the wait,
+/// the sources once there is an answer. Only question tasks keep the pane open.
+fn resting_panel(app: &Workspace) -> Option<Panel> {
+    let turn = app.current_turn()?;
+    let waiting = turn.state == State::Working && app.current_answer().is_none();
+    Some(
+        if waiting || (app.clarification_request().is_some() && !app.text_view) {
+            Panel::Activity
+        } else {
+            Panel::Sources
+        },
+    )
+}
+
+/// The side pane takes about a third of a wide screen, within readable limits.
+fn side_width(width: u16) -> u16 {
+    (width * 3 / 10).clamp(43, 56)
+}
+
+/// The width from which the side pane stays open beside the answer without crowding it.
+const ROOMY: u16 = 120;
+
+type Keys = Vec<(&'static str, &'static str)>;
+
+/// Every key the screen offers, in one row: the focused pane's on the left, most useful
+/// first, and the ones that work everywhere on the right.
+fn footer_keys(app: &Workspace) -> (Keys, Keys) {
+    let everywhere = vec![
+        ("n", "New"),
+        ("w", "Workflow"),
+        ("^K", "Actions"),
+        ("Tab", "Tasks"),
+    ];
+    if app.agent_picker.is_some() {
+        return (
+            vec![
+                ("↑↓", "Agent"),
+                ("Tab", "Model/mode"),
+                ("Enter", "Select"),
+                ("Esc", "Cancel"),
+            ],
+            vec![],
+        );
+    }
+    if app.pending.is_some() {
+        return (vec![("Ctrl+C", "Quit (work continues)")], vec![]);
+    }
+    if app.panel == Some(Panel::Capabilities) {
+        return (
+            vec![
+                ("↑↓", "Select"),
+                ("Enter", "Run"),
+                ("r", "Reload capabilities"),
+                ("Esc", "Back"),
+            ],
+            vec![],
+        );
+    }
+    match app.input {
+        Some(Input::ClarificationAnswer | Input::ClarificationContext) => {
+            return (
+                vec![
+                    ("Enter", "Save/send"),
+                    ("Alt+Enter", "Newline"),
+                    ("Esc", "Back (keeps draft)"),
+                ],
+                vec![],
+            );
+        }
+        Some(Input::Workflow) => {
+            return (
+                vec![
+                    ("Enter", "Start"),
+                    ("Alt+Enter", "Newline"),
+                    ("Tab", "Select workflow"),
+                    ("←→", "Change"),
+                    ("F2", "Question"),
+                    ("Esc", "Back"),
+                ],
+                vec![("^K", "Actions")],
+            );
+        }
+        Some(Input::Question) => {
+            return (
+                vec![
+                    ("Enter", "Send"),
+                    ("Alt+Enter", "Newline"),
+                    ("F2", "Workflow"),
+                    ("F3", "Agent/model"),
+                    ("Esc", "Back"),
+                ],
+                vec![("^K", "Actions")],
+            );
+        }
+        Some(Input::FollowUp | Input::Decision(_)) => {
+            return (
+                vec![
+                    ("Enter", "Send"),
+                    ("Alt+Enter", "Newline"),
+                    ("Esc", "Back (keeps draft)"),
+                ],
+                vec![("^K", "Actions")],
+            );
+        }
+        None => {}
+    }
+    if app.list_focus {
+        return (
+            vec![
+                ("↑↓", "Select"),
+                ("Enter", "Open"),
+                ("n", "Question"),
+                ("w", "Workflow"),
+                ("q", "Quit"),
+            ],
+            vec![("^K", "Actions")],
+        );
+    }
+    let question = app.detail.as_ref().is_some_and(|d| d.question.is_some());
+    let tabs = if question {
+        [("s", "Sources"), ("a", "Activity"), ("h", "Record")]
+    } else {
+        [("e", "Evidence"), ("a", "Activity"), ("h", "Receipt")]
+    };
+    let mut keys = vec![];
+    if let Some(panel) = app.panel {
+        match panel {
+            Panel::Record => keys.push(("↑↓", "Scroll")),
+            _ if app.expanded => keys.extend([("↑↓", "Scroll"), ("Enter", "Collapse")]),
+            _ => keys.extend([("↑↓", "Select"), ("Enter", "Expand")]),
+        }
+        if panel == Panel::Sources {
+            keys.extend([("o", "Open source"), ("b", "Ask about selection")]);
+        }
+        keys.push(("Esc", "Back"));
+        keys.extend(tabs);
+        return (keys, everywhere);
+    }
+    let viewing = app.result_view().is_some() && !app.text_view;
+    if app.clarification_request().is_some() && !app.text_view {
+        if app.clarification_pending() {
+            keys.extend([
+                ("↑↓", "Choose"),
+                ("Space", "Select"),
+                ("Enter", "Continue"),
+                ("f", "Own answer"),
+                ("c", "Context"),
+            ]);
+        } else {
+            keys.extend([("Enter", "Details"), ("[", "Previous"), ("]", "Next")]);
+        }
+        keys.extend([("a", "Activity"), ("v", "Original message")]);
+    } else if question {
+        let working = app
+            .detail
+            .as_ref()
+            .is_some_and(|d| d.summary.state == State::Working);
+        let stopped = app
+            .current_turn()
+            .is_some_and(|q| matches!(q.state, State::Stopped | State::Cancelled));
+        if viewing {
+            keys.extend([("↑↓", "Select"), ("Enter", "Inspect")]);
+        } else {
+            keys.push(("↑↓", "Scroll"));
+        }
+        keys.push(if working {
+            ("x", "Cancel")
+        } else {
+            ("f", "Follow up")
+        });
+        keys.extend(tabs);
+        if !working {
+            keys.push(("r", if stopped { "Retry" } else { "Refresh" }));
+        }
+        if app.current_answer().is_some() {
+            keys.push(("c", "Copy"));
+            keys.push(("v", if viewing { "Full text" } else { "View/source" }));
+        }
+        if !working && viewing {
+            keys.push(("b", "Ask about selection"));
+        }
+        if app
+            .detail
+            .as_ref()
+            .and_then(|d| d.question.as_ref())
+            .is_some_and(|q| q.turns.len() > 1)
+        {
+            keys.push(("[ ]", "Answers"));
+        }
+        if working {
+            keys.push(("q", "Close (work continues)"));
+        }
+    } else if app.change_focus && !app.text_view {
+        keys.extend([
+            ("↑↓", "Scroll"),
+            ("←→", "File"),
+            ("Enter", "Expand patch"),
+            ("p", "Checks"),
+            ("q", "Quit"),
+        ]);
+    } else if viewing {
+        keys.extend([
+            ("↑↓", "Select"),
+            ("Enter", "Evidence"),
+            ("v", "Full text"),
+            ("q", "Quit"),
+        ]);
+    } else {
+        keys.extend([
+            ("↑↓", "Scroll"),
+            ("v", "View/source"),
+            ("q", "Close (work continues)"),
+        ]);
+    }
+    if app.agent_available {
+        keys.push(("g", "Open agent"));
+    }
+    (keys, everywhere)
+}
+
+fn draw_footer(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
+    let (left, right) = footer_keys(app);
+    let width = area.width as usize;
+    let cell = |(key, label): &(&str, &str)| Line::raw(format!("{key} {label}")).width() + 2;
+    let push = |spans: &mut Vec<Span<'static>>, (key, label): &(&'static str, &'static str)| {
+        spans.push(Span::styled(*key, t.fg(t.accent)));
+        spans.push(Span::styled(format!(" {label}  "), t.dim()));
+    };
+    // A wide row keeps the keys that work everywhere on the right; the focused pane's
+    // keys take the rest, most useful first, and the last ones give way when it is tight.
+    let right_width = right.iter().map(cell).sum::<usize>();
+    let room = if width >= 110 && !right.is_empty() {
+        width.saturating_sub(right_width + 1)
+    } else {
+        width
+    };
+    let mut spans = vec![Span::raw(" ")];
+    let mut used = 1;
+    if app.pending.is_some() {
+        let starting = format!("{} Starting…  ", spinner(app.frame));
+        used += Line::raw(starting.as_str()).width();
+        spans.push(Span::styled(starting, t.fg(t.run)));
+    }
+    for (i, item) in left.iter().enumerate() {
+        if i > 0 && used + cell(item) > room + 2 {
+            break;
+        }
+        push(&mut spans, item);
+        used += cell(item);
+    }
+    if room < width {
+        spans.push(Span::raw(
+            " ".repeat((width + 2).saturating_sub(used + right_width)),
+        ));
+        for item in &right {
+            push(&mut spans, item);
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 pub(crate) fn text_block(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>, scroll: u16) {
     let p = Paragraph::new(lines).wrap(Wrap { trim: false });
@@ -1398,20 +1708,7 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
         " CONDUCTOR"
     };
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(title, t.bold()),
-            Span::styled(
-                if area.width >= 110 {
-                    "   n new   w workflow   ^K actions   Tab tasks"
-                } else if !app.demo {
-                    "   n new   ^K actions   Tab tasks"
-                } else {
-                    ""
-                },
-                t.dim(),
-            ),
-        ]))
-        .block(
+        Paragraph::new(title).style(t.bold()).block(
             Block::default()
                 .borders(Borders::BOTTOM)
                 .border_style(t.fg(t.line)),
@@ -1419,7 +1716,7 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
         brand,
     );
     f.render_widget(
-        Paragraph::new(clean(&workbench::agent_label(app)))
+        Paragraph::new(format!("{} ", clean(&workbench::agent_label(app))))
             .alignment(ratatui::layout::Alignment::Right)
             .style(t.dim())
             .block(
@@ -1429,26 +1726,14 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
             ),
         runtime,
     );
+    let padded = ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    };
     if let Some(picker) = &app.agent_picker {
-        workbench::draw_picker(
-            f,
-            body.inner(ratatui::layout::Margin {
-                horizontal: 2,
-                vertical: 1,
-            }),
-            picker,
-            t,
-        );
+        workbench::draw_picker(f, body.inner(padded), picker, t);
     } else if app.panel == Some(Panel::Capabilities) {
-        draw_panel(
-            f,
-            body.inner(ratatui::layout::Margin {
-                horizontal: 2,
-                vertical: 1,
-            }),
-            app,
-            t,
-        );
+        draw_panel(f, body.inner(padded), app, Panel::Capabilities, true, t);
     } else if app.list_focus {
         draw_tasks(f, body, app, t);
     } else {
@@ -1456,23 +1741,27 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
             horizontal: 2,
             vertical: u16::from(body.height >= 28),
         });
+        // One frame for every state: the task on the left, its sources and steps on the
+        // right. A narrow pane shows one of the two at a time.
+        let wide = content.width >= 94;
+        let side = app.panel.map(|panel| (panel, true)).or_else(|| {
+            resting_panel(app)
+                .filter(|_| content.width >= ROOMY)
+                .map(|panel| (panel, false))
+        });
         if app.detail.is_none() {
             draw_compose(f, content, app, t);
-        } else if app.panel.is_some() && content.width < 94 {
-            draw_panel(f, content, app, t);
-        } else if app.panel.is_some() {
-            let [main, panel] =
-                Layout::horizontal([Constraint::Min(48), Constraint::Length(43)]).areas(content);
-            draw_task(
-                f,
-                main.inner(ratatui::layout::Margin {
-                    horizontal: 1,
-                    vertical: 0,
-                }),
-                app,
-                t,
-            );
-            draw_panel(f, panel, app, t);
+        } else if let Some((panel, focused)) = side.filter(|_| wide) {
+            let [main, beside] = Layout::horizontal([
+                Constraint::Min(48),
+                Constraint::Length(side_width(content.width)),
+            ])
+            .spacing(1)
+            .areas(content);
+            draw_task(f, main, app, t);
+            draw_panel(f, beside, app, panel, focused, t);
+        } else if let Some(panel) = app.panel {
+            draw_panel(f, content, app, panel, true, t);
         } else {
             draw_task(f, content, app, t);
         }
@@ -1485,37 +1774,7 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
             status,
         );
     }
-    let keys = if app.agent_picker.is_some() {
-        " ↑↓ agent   Tab model/mode   Enter select   Esc cancel"
-    } else if app.pending.is_some() {
-        " Starting…  Ctrl+C quit (work continues)"
-    } else if app.panel == Some(Panel::Capabilities) {
-        " ↑↓ select   Enter run   r reload capabilities   Esc back"
-    } else if matches!(
-        app.input,
-        Some(Input::ClarificationAnswer | Input::ClarificationContext)
-    ) {
-        " Enter save/send   Alt+Enter newline   Esc back (keeps draft)"
-    } else if app.input.is_some() {
-        " Enter send   Alt+Enter newline   Esc back   F2 workflow   F3 agent/model"
-    } else if app.list_focus {
-        " ↑↓ select   Enter open   n question   w workflow   q quit"
-    } else if app.panel.is_some() {
-        " ↑↓ select/scroll   Enter expand   PgUp/PgDn scroll   o open source   Esc back"
-    } else if app.clarification_request().is_some() && !app.text_view {
-        if app.clarification_pending() {
-            " ↑↓ choose   Space select   Enter continue   f own answer   c context   Tab tasks"
-        } else {
-            " Read-only clarification   Enter details   [ previous   ] next   Tab tasks"
-        }
-    } else if app.change_focus && !app.text_view {
-        " ↑↓ scroll   ←→ file   Enter expand patch   p checks   Tab tasks   q quit"
-    } else if app.result_view().is_some() && !app.text_view {
-        " ↑↓ select   Enter evidence   v full text   Tab tasks   q quit"
-    } else {
-        " ↑↓ scroll   v view/source   Tab tasks   q close (work continues)"
-    };
-    f.render_widget(Paragraph::new(keys).style(t.dim()), footer);
+    draw_footer(f, footer, app, t);
 }
 
 fn draw_tasks(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
@@ -1554,46 +1813,106 @@ fn draw_tasks(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
 }
 
 fn draw_compose(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
-    let width = area.width.min(86);
-    let area = Rect::new(area.x, area.y, width, area.height);
-    let [intro, input, _] = Layout::vertical([
-        Constraint::Length(7),
-        Constraint::Length(6),
-        Constraint::Min(0),
-    ])
-    .areas(area);
     let workflow = app.input == Some(Input::Workflow);
-    let mut lines = vec![
-        line(
-            if workflow {
-                "Start a workflow"
-            } else {
-                "What would you like to know?"
-            },
-            t.bold(),
-        ),
-        Line::raw(""),
-    ];
+    let [head, body] = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
+    f.render_widget(
+        Paragraph::new(vec![
+            line(
+                if workflow {
+                    "Start a workflow"
+                } else {
+                    "What would you like to know?"
+                },
+                t.bold(),
+            ),
+            line(
+                if workflow {
+                    "Enter a ticket path or describe the work."
+                } else {
+                    "Ask a question. Follow up in the same task."
+                },
+                t.dim(),
+            ),
+        ]),
+        head,
+    );
+    // What this request will run with. The same rows sit beside the box or above it.
+    let name = app
+        .workflows
+        .get(app.workflow)
+        .map(|s| s.rsplit('/').next().unwrap_or(s))
+        .unwrap_or("No workflows found");
+    let mut rows: Vec<(&str, String, Style)> = vec![];
     if workflow {
-        lines.push(line(
-            app.workflows
-                .get(app.workflow)
-                .map(|s| s.rsplit('/').next().unwrap_or(s))
-                .unwrap_or("No workflows found"),
-            t.fg(t.accent),
-        ));
-        lines.push(line("Tab select workflow · ← → change", t.dim()));
-        lines.push(line("Enter a ticket path or describe the work.", t.text()));
+        let style = if app.workflow_focus {
+            t.fg(t.accent)
+        } else {
+            t.text()
+        };
+        rows.push(("Workflow", name.to_owned(), style));
     } else {
-        lines.push(line(
-            "Ask a question. Follow up in the same task.",
+        let amp = app.agent.kind == conductor_model::agent::AgentKind::Amp;
+        rows.push(("Agent", app.agent.kind.label().to_owned(), t.text()));
+        rows.push((
+            if amp { "Mode" } else { "Model" },
+            if amp {
+                &app.agent.mode
+            } else {
+                &app.agent.model
+            }
+            .clone()
+            .unwrap_or_else(|| "runtime default".into()),
             t.text(),
         ));
-        lines.push(line(app.agent.label(), t.fg(t.accent)));
-        lines.push(line(app.agent.kind.scope(), t.dim()));
-        lines.push(line("F3 choose agent / model", t.dim()));
+        for (i, part) in app.agent.kind.scope().split(" · ").enumerate() {
+            rows.push((if i == 0 { "Scope" } else { "" }, part.to_owned(), t.text()));
+        }
     }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), intro);
+    let lines: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value, style)| {
+            Line::from(vec![
+                Span::styled(format!("{label:<10}"), t.dim()),
+                Span::styled(clean(&value), style),
+            ])
+        })
+        .collect();
+    let wide = body.width >= ROOMY;
+    let (main, beside) = if wide {
+        let [main, beside] = Layout::horizontal([
+            Constraint::Min(48),
+            Constraint::Length(side_width(body.width)),
+        ])
+        .spacing(1)
+        .areas(body);
+        (main, Some(beside))
+    } else {
+        (body, None)
+    };
+    let above = if wide { 0 } else { lines.len() as u16 + 1 };
+    let [info, _, input] = Layout::vertical([
+        Constraint::Length(above),
+        Constraint::Min(0),
+        Constraint::Length(5),
+    ])
+    .areas(main);
+    if let Some(beside) = beside {
+        let block = pane(
+            t,
+            if workflow {
+                "This workflow"
+            } else {
+                "This question"
+            },
+            false,
+        )
+        .padding(Padding::new(1, 1, 1, 0));
+        let inner = block.inner(beside);
+        f.render_widget(block, beside);
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    } else {
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), info);
+    }
     draw_input(f, input, app, t, " Your request ");
 }
 
@@ -1721,6 +2040,137 @@ fn draw_clarification(
     }
 }
 
+/// A question in the shared frame: the request and its state on top, the answer in the
+/// middle, the request box at the bottom. Nothing moves between asking and the answer.
+fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
+    let Some(d) = &app.detail else { return };
+    let Some(q) = &d.question else { return };
+    let turn = app.current_turn();
+    let state = turn.map(|turn| turn.state).unwrap_or(d.summary.state);
+    let composing = app.input.is_some();
+    let composer_height = match (composing, area.height >= 12) {
+        (true, true) => 5,
+        (true, false) | (false, true) => 3,
+        (false, false) => 0,
+    };
+    let [header, body, composer] = Layout::vertical([
+        Constraint::Length(if area.height >= 12 { 3 } else { 2 }),
+        Constraint::Min(0),
+        Constraint::Length(composer_height),
+    ])
+    .areas(area);
+    let title = turn
+        .filter(|turn| turn.input_response.is_none())
+        .map(|turn| turn.question.as_str())
+        .unwrap_or(&d.summary.title);
+    let glyph = match state {
+        State::Working => spinner(app.frame),
+        State::Stopped => "!",
+        State::NeedsInput => "?",
+        State::Cancelled => "–",
+        _ => "✓",
+    };
+    let mut note = format!(" · {}", clean(&d.context));
+    if state != State::Working
+        && let Some(answer) = app.current_answer()
+    {
+        let n = answer.sources.len();
+        note.push_str(&format!(" · {n} source{}", if n == 1 { "" } else { "s" }));
+    }
+    f.render_widget(
+        Paragraph::new(vec![
+            line(title.lines().next().unwrap_or(""), t.bold()),
+            Line::from(vec![
+                Span::styled(format!("{glyph} {}", state.label()), state_style(t, state)),
+                Span::styled(note, t.dim()),
+            ]),
+        ]),
+        header,
+    );
+    let mut context = Vec::new();
+    if q.turns.len() > 1 {
+        context.push(line(
+            format!("Answer {} of {}", app.turn + 1, q.turns.len()),
+            t.dim(),
+        ));
+    }
+    if let Some(turn) = turn {
+        if turn.input_response.is_some() {
+            context.push(line(&turn.question, t.dim()));
+        }
+        if let Some(error) = &turn.error {
+            context.push(line(error, t.fg(t.fail)));
+        }
+        if app.answer_is_previous() {
+            context.push(line(
+                "Previous answer · the latest request has no new answer yet.",
+                t.fg(t.warn),
+            ));
+        }
+    }
+    let context_height = Paragraph::new(context.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(body.width.max(1))
+        .min(6)
+        .min(body.height.saturating_sub(3) as usize) as u16;
+    let [notice, result] =
+        Layout::vertical([Constraint::Length(context_height), Constraint::Min(0)]).areas(body);
+    f.render_widget(Paragraph::new(context).wrap(Wrap { trim: false }), notice);
+    let focused = app.panel.is_none() && !composing;
+    let view = app.result_view().filter(|_| !app.text_view);
+    if let Some(view) = &view {
+        result_view::draw(f, result, view, app.result_row, focused, t);
+    } else if app.current_answer().is_some() {
+        let text = task_text(app, t, document::inner_width(result.width));
+        let title = if app.text_view && app.result_view().is_none() {
+            "Answer · Markdown source"
+        } else {
+            "Answer · Markdown"
+        };
+        document::draw(f, result, text, app.scroll, title, focused, t);
+    } else {
+        // No answer yet: the step in progress sits where the answer will land.
+        let text = match state {
+            State::Working => vec![line(
+                format!(
+                    "{}…",
+                    turn.and_then(|turn| turn.activity.last())
+                        .map(activity_title)
+                        .unwrap_or_else(|| "Starting".into())
+                ),
+                t.pulse(app.frame),
+            )],
+            State::Cancelled => vec![line(
+                "Cancelled. Your question and activity are saved.",
+                t.text(),
+            )],
+            _ => vec![line("No answer was recorded for this request.", t.dim())],
+        };
+        document::draw(f, result, text, 0, "Answer", focused, t);
+    }
+    if composing {
+        draw_input(f, composer, app, t, " Follow up ");
+    } else if composer.height > 0 {
+        let prompt = if state == State::Working {
+            Line::styled(" Follow up when the answer arrives", t.dim())
+        } else {
+            Line::from(vec![
+                Span::styled(" f", t.fg(t.accent)),
+                Span::styled("  Ask about this answer…", t.dim()),
+            ])
+        };
+        f.render_widget(
+            Paragraph::new(prompt).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .style(t.text().bg(t.surface))
+                    .border_style(t.fg(t.line)),
+            ),
+            composer,
+        );
+    }
+}
+
 fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -1732,17 +2182,18 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         draw_clarification(f, area, app, &binding, &request, t);
         return;
     }
-    let question = d.question.is_some();
-    let state = app
-        .current_turn()
-        .map(|q| q.state)
-        .unwrap_or(d.summary.state);
-    let action_height =
-        if area.height >= 18 && (question || app.input.is_some() || d.waiting.is_some()) {
-            5
-        } else {
-            2
-        };
+    if d.question.is_some() {
+        draw_question(f, area, app, t);
+        return;
+    }
+    // Workflow runs and native captures keep their own layout.
+    let focused = app.panel.is_none() && app.input.is_none();
+    let state = d.summary.state;
+    let action_height = if area.height >= 18 && (app.input.is_some() || d.waiting.is_some()) {
+        5
+    } else {
+        2
+    };
     let header_height = if area.height >= 18 {
         5
     } else if area.height >= 12 {
@@ -1758,41 +2209,6 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     if let Some(notice) = d.native.as_ref().and_then(|n| n.notice.as_ref()) {
         context.push(line(notice, t.fg(t.warn)));
     }
-    if let Some(q) = &d.question {
-        if q.turns.len() > 1 {
-            context.push(line(
-                format!(
-                    "Answer {} of {} · [ previous · ] next",
-                    app.turn + 1,
-                    q.turns.len()
-                ),
-                t.dim(),
-            ));
-        }
-        if let Some(turn) = app.current_turn() {
-            if turn.input_response.is_some() {
-                context.push(line(&turn.question, t.dim()));
-            }
-            if let Some(error) = &turn.error {
-                context.push(line(error, t.fg(t.fail)));
-            }
-            if app.answer_is_previous() {
-                context.push(line(
-                    "Previous answer · the latest request has no new answer yet.",
-                    t.fg(t.warn),
-                ));
-            }
-            if state == State::Working {
-                context.push(line(
-                    turn.activity
-                        .last()
-                        .map(activity_title)
-                        .unwrap_or_else(|| "Starting the lookup…".into()),
-                    t.fg(t.accent),
-                ));
-            }
-        }
-    }
     if let Some(w) = &d.waiting {
         context.push(line(&w.question, t.fg(t.warn)));
     }
@@ -1801,14 +2217,14 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         .line_count(area.width)
         .min(6)
         .min(available as usize) as u16;
-    let document_view = view.is_none() && (question || d.native.is_some());
+    let document_view = view.is_none() && d.native.is_some();
     let text_width = if document_view {
         document::inner_width(area.width)
     } else {
         area.width
     };
     let text = task_text(app, t, text_width);
-    let has_changes = !question && !d.changes.is_empty() && !app.text_view;
+    let has_changes = !d.changes.is_empty() && !app.text_view;
     let desired = if has_changes {
         22
     } else if let Some(v) = &view {
@@ -1829,11 +2245,7 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         Constraint::Length(action_height),
     ])
     .areas(area);
-    let title = app
-        .current_turn()
-        .filter(|turn| turn.input_response.is_none())
-        .map(|q| q.question.as_str())
-        .unwrap_or(&d.summary.title);
+    let title = &d.summary.title;
     let [request, status, toolbar] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -1846,7 +2258,7 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             .wrap(Wrap { trim: false }),
         request,
     );
-    let label = if !question && d.waiting.as_ref().is_some_and(|w| w.ask.is_none()) {
+    let label = if d.waiting.as_ref().is_some_and(|w| w.ask.is_none()) {
         "Ready for review"
     } else {
         state.label()
@@ -1860,11 +2272,7 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         status,
     );
     if toolbar.height >= 2 {
-        let mut tools = if question {
-            "s Sources   a Activity   h Source record".to_owned()
-        } else {
-            "e Evidence   a Activity   h Receipt".to_owned()
-        };
+        let mut tools = "e Evidence   a Activity   h Receipt".to_owned();
         if app.agent_available {
             tools.push_str("   g Open agent");
         }
@@ -1879,21 +2287,15 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     if has_changes {
         draw_change(f, result, app, view.as_ref(), t);
     } else if let Some(view) = &view {
-        result_view::draw(f, result, view, app.result_row, t);
+        result_view::draw(f, result, view, app.result_row, focused, t);
     } else if document_view {
-        let title = if let Some(native) = &d.native {
-            match native.media_type.as_str() {
-                "text/markdown" if app.text_view => "Document · Markdown source",
-                "text/markdown" => "Document · Markdown",
-                "application/json" => "Data · JSON",
-                _ => "Document · Text",
-            }
-        } else if app.text_view && app.result_view().is_none() {
-            "Answer · Markdown source"
-        } else {
-            "Answer · Markdown"
+        let title = match d.native.as_ref().map(|n| n.media_type.as_str()) {
+            Some("text/markdown") if app.text_view => "Document · Markdown source",
+            Some("text/markdown") => "Document · Markdown",
+            Some("application/json") => "Data · JSON",
+            _ => "Document · Text",
         };
-        document::draw(f, result, text, app.scroll, title, t);
+        document::draw(f, result, text, app.scroll, title, focused, t);
     } else {
         text_block(f, result, text, app.scroll);
     }
@@ -1912,16 +2314,12 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             match app.input {
                 Some(Input::Decision(true)) => " What did you check? ",
                 Some(Input::Decision(false)) => " What needs to change? ",
-                _ => " Follow up · Enter send ",
+                _ => " Follow up ",
             },
         );
         return;
     }
-    let evidence = if question { "s Sources" } else { "e Evidence" };
-    let mut commands = format!(
-        "{evidence}   a Activity   h {}",
-        if question { "Source record" } else { "Receipt" }
-    );
+    let mut commands = "e Evidence   a Activity   h Receipt".to_owned();
     if app.agent_available {
         commands.push_str("   g Open agent");
     }
@@ -1932,16 +2330,6 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         if header_height >= 5 {
             if has_changes {
                 "p Changes / checks   ← → file   Enter inspect".into()
-            } else if question {
-                format!(
-                    "{}   {}",
-                    workbench::agent_label(app),
-                    if app.current_answer().is_some() {
-                        "b Ask about selection"
-                    } else {
-                        ""
-                    }
-                )
             } else {
                 commands.clone()
             }
@@ -1950,18 +2338,7 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         },
         t.dim(),
     )];
-    if question {
-        actions.push(line(
-            if d.summary.state == State::Working {
-                "x Cancel lookup"
-            } else if matches!(state, State::Stopped | State::Cancelled) {
-                "f Follow up   r Retry   c Copy"
-            } else {
-                "f Follow up   r Refresh   c Copy"
-            },
-            t.text(),
-        ));
-    } else if let Some(native) = &d.native {
+    if let Some(native) = &d.native {
         actions.push(line(
             if native.refresh.is_some() {
                 "r Refresh   c Copy   ^K Actions"
@@ -1987,7 +2364,7 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     }
     let [keys, input] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(action);
     f.render_widget(Paragraph::new(actions), keys);
-    if !question && d.waiting.is_some() && input.height >= 2 {
+    if d.waiting.is_some() && input.height >= 2 {
         f.render_widget(
             Paragraph::new(if let Some(receipt) = &d.receipt {
                 if receipt.not_checked.is_empty() {
@@ -2000,19 +2377,6 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             })
             .style(t.dim())
             .wrap(Wrap { trim: false }),
-            input,
-        );
-    }
-    if question && d.summary.state != State::Working && input.height >= 2 {
-        f.render_widget(
-            Paragraph::new(" f  Ask about this answer…")
-                .style(t.dim())
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .style(t.text().bg(t.surface))
-                        .border_style(t.fg(t.line)),
-                ),
             input,
         );
     }
@@ -2086,7 +2450,7 @@ fn task_text(app: &Workspace, t: &Theme, width: u16) -> Vec<Line<'static>> {
                     "No sources cited.".into()
                 } else {
                     format!(
-                        "{} source{} · s inspect",
+                        "{} source{}",
                         answer.sources.len(),
                         if answer.sources.len() == 1 { "" } else { "s" }
                     )
@@ -2238,68 +2602,111 @@ fn captured_text(text: &str, t: &Theme, width: u16) -> Vec<Line<'static>> {
     document::plain(text, width, t)
 }
 
-fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
-    let Some(panel) = app.panel else { return };
-    if panel == Panel::Record {
-        workbench::draw_record(f, area, app, t);
+/// The side pane's title: its tabs, with the one on show marked.
+fn panel_tabs(app: &Workspace, panel: Panel, focused: bool, t: &Theme) -> Line<'static> {
+    if panel == Panel::Capabilities {
+        return line(" Actions · discovered capabilities ", t.bold());
+    }
+    let Some(d) = &app.detail else {
+        return Line::raw("");
+    };
+    let steps = format!("Activity {}", app.activity().len());
+    let tabs = if d.question.is_some() {
+        let sources = if app.source_filter.is_some() && focused {
+            "Sources · selected row".into()
+        } else {
+            format!(
+                "Sources {}",
+                app.current_answer().map_or(0, |a| a.sources.len())
+            )
+        };
+        [
+            (Panel::Sources, sources),
+            (Panel::Activity, steps),
+            (Panel::Record, "Record".into()),
+        ]
+    } else {
+        [
+            (Panel::Evidence, format!("Evidence {}", d.evidence.len())),
+            (Panel::Activity, steps),
+            (Panel::Record, "Receipt".into()),
+        ]
+    };
+    let mut spans = vec![Span::raw(" ")];
+    for (tab, label) in tabs {
+        let style = if tab != panel {
+            t.dim()
+        } else if focused {
+            t.fg(t.accent).add_modifier(Modifier::BOLD)
+        } else {
+            t.text()
+        };
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(if tab == Panel::Record { " " } else { "  " }));
+    }
+    Line::from(spans)
+}
+
+struct PanelRow {
+    title: String,
+    detail: String,
+    failed: bool,
+    lines: Vec<Line<'static>>,
+}
+
+fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused: bool, t: &Theme) {
+    let block = Block::default()
+        .title(panel_tabs(app, panel, focused, t))
+        .borders(Borders::ALL)
+        .padding(Padding::new(1, 1, 1, 0))
+        .border_style(t.fg(if focused { t.accent } else { t.line }));
+    let content = block.inner(area);
+    f.render_widget(block, area);
+    if content.width == 0 || content.height == 0 {
         return;
     }
-    let title = match panel {
-        Panel::Record => " Record ",
-        Panel::Capabilities => " Actions · discovered capabilities ",
-        Panel::Sources if app.source_filter.is_some() => " Sources · selected row ",
-        Panel::Sources => " Sources ",
-        Panel::Activity => " Activity ",
-        Panel::Evidence => " Evidence ",
+    if panel == Panel::Record {
+        workbench::draw_record(f, content, app, t);
+        return;
+    }
+    // A pane at rest shows everything; a row's own sources are a focused inspection.
+    let filter = app.source_filter.as_ref().filter(|_| focused);
+    let selection_detail = app.selection_detail.as_ref().filter(|_| focused);
+    let width = content.width.saturating_sub(2).max(1);
+    let two_lines = |title: &str, second: &str, failed: bool| {
+        vec![
+            line(title, if failed { t.fg(t.fail) } else { t.text() }),
+            line(second, t.dim()),
+            Line::raw(""),
+        ]
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::LEFT | Borders::TOP)
-        .border_style(t.fg(t.line))
-        .title_style(t.bold());
-    let inner = block.inner(area).inner(ratatui::layout::Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
-    f.render_widget(block, area);
-    let [hint, content] =
-        Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
-    f.render_widget(
-        Paragraph::new(if panel == Panel::Capabilities {
-            "Enter run · r reload · Esc back"
-        } else {
-            "Esc back · Enter expand"
-        })
-        .style(t.dim()),
-        hint,
-    );
-    let mut rows: Vec<(String, String, bool)> = vec![];
+    let mut rows: Vec<PanelRow> = vec![];
     match panel {
         Panel::Record => {}
         Panel::Capabilities => {
             for item in &app.capabilities {
-                rows.push((
-                    item.label.clone(),
-                    item.unavailable
-                        .as_ref()
-                        .map(|e| format!("Unavailable: {e}"))
-                        .unwrap_or_else(|| format!("{} · {}", item.binding.id, item.detail)),
-                    item.unavailable.is_some(),
-                ));
+                let detail = item
+                    .unavailable
+                    .as_ref()
+                    .map(|e| format!("Unavailable: {e}"))
+                    .unwrap_or_else(|| format!("{} · {}", item.binding.id, item.detail));
+                let failed = item.unavailable.is_some();
+                rows.push(PanelRow {
+                    lines: two_lines(&item.label, detail.lines().next().unwrap_or(""), failed),
+                    title: item.label.clone(),
+                    detail,
+                    failed,
+                });
             }
         }
         Panel::Sources => {
             if let Some(answer) = app.current_answer() {
                 for (i, c) in answer.sources.iter().enumerate() {
-                    if app
-                        .source_filter
-                        .as_ref()
-                        .is_some_and(|refs| !refs.contains(&i))
-                    {
+                    if filter.is_some_and(|refs| !refs.contains(&i)) {
                         continue;
                     }
                     let mut detail = format!("{}\n\nSupports\n{}", c.url, c.supports);
-                    if let Some(selected) = &app.selection_detail {
+                    if let Some(selected) = selection_detail {
                         detail = format!("{selected}\n\n{detail}");
                     }
                     if let Some(at) = &c.observed_at {
@@ -2314,21 +2721,68 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
                     } else {
                         detail.push_str(" No matching fetch captured.");
                     }
-                    rows.push((format!("[{}] {}", i + 1, c.title), detail, false));
+                    let title = format!("[{}] {}", i + 1, c.title);
+                    // The address wraps instead of being cut off at the pane's edge.
+                    let mut lines = document::wrap(
+                        &[Span::styled(clean(&title), t.text())],
+                        width,
+                        "",
+                        "    ",
+                        true,
+                    );
+                    lines.extend(
+                        document::wrap(
+                            &[Span::styled(clean(&c.url), t.dim())],
+                            width,
+                            "",
+                            "",
+                            true,
+                        )
+                        .into_iter()
+                        .take(3),
+                    );
+                    lines.push(Line::raw(""));
+                    rows.push(PanelRow {
+                        title,
+                        detail,
+                        failed: false,
+                        lines,
+                    });
                 }
             }
         }
         Panel::Activity => {
-            for a in app.activity().iter().rev() {
-                rows.push((
-                    format!("{}{}", if a.failed { "! " } else { "" }, activity_title(a)),
-                    format!("{} · {}\n\n{}", a.at, a.actor, a.detail),
-                    a.failed,
-                ));
+            let steps = app.activity();
+            for (i, a) in steps.iter().enumerate() {
+                let title = clean(&activity_title(a));
+                let actor = clean(&a.actor);
+                let (glyph, glyph_style, title_style) = if a.failed {
+                    ("!", t.fg(t.fail), t.fg(t.fail))
+                } else if app.working() && i + 1 == steps.len() {
+                    (spinner(app.frame), t.fg(t.run), t.pulse(app.frame))
+                } else if app.fresh(i) {
+                    ("✓", t.fg(t.pass), t.dim())
+                } else {
+                    ("✓", t.fg(t.pass), t.text())
+                };
+                let used =
+                    2 + Line::raw(title.as_str()).width() + Line::raw(actor.as_str()).width();
+                let gap = (width as usize).saturating_sub(used).max(2);
+                rows.push(PanelRow {
+                    lines: vec![Line::from(vec![
+                        Span::styled(format!("{glyph} "), glyph_style),
+                        Span::styled(title.clone(), title_style),
+                        Span::raw(" ".repeat(gap)),
+                        Span::styled(actor, t.dim()),
+                    ])],
+                    title,
+                    detail: format!("{} · {}\n\n{}", a.at, a.actor, a.detail),
+                    failed: a.failed,
+                });
             }
         }
         Panel::Evidence => {
-            if let Some((title, detail)) = &app.evidence_snapshot {
+            if let Some((title, detail)) = app.evidence_snapshot.as_ref().filter(|_| focused) {
                 let mut lines = vec![
                     line(title, t.bold()),
                     line("Saved selection · original capture retained below", t.dim()),
@@ -2340,68 +2794,91 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             }
             if let Some(d) = &app.detail {
                 for (title, detail) in &d.evidence {
-                    rows.push((title.clone(), detail.clone(), false));
+                    rows.push(PanelRow {
+                        lines: two_lines(title, detail.lines().next().unwrap_or(""), false),
+                        title: title.clone(),
+                        detail: detail.clone(),
+                        failed: false,
+                    });
                 }
             }
         }
     }
     if rows.is_empty() {
         let mut lines = captured_text(
-            app.selection_detail.as_deref().unwrap_or(""),
+            selection_detail.map(String::as_str).unwrap_or(""),
             t,
             content.width,
         );
-        lines.push(Line::raw(""));
-        lines.push(line(
-            match panel {
-                Panel::Record => "No record selected.",
-                Panel::Capabilities => "No operations available. Questions remain available with n. Register reports with conductor capability add.",
-                Panel::Sources if app.source_filter.is_some() => {
-                    "No source attached to this row. s shows all answer sources."
+        if !lines.is_empty() {
+            lines.push(Line::raw(""));
+        }
+        let no_tools = app
+            .detail
+            .as_ref()
+            .and_then(|d| d.question.as_ref())
+            .map(|q| q.agent.kind)
+            .filter(|kind| *kind != conductor_model::agent::AgentKind::Claude);
+        let why = match panel {
+            Panel::Record => "No record selected.".into(),
+            Panel::Capabilities => "No operations available. Questions remain available with n. Register reports with conductor capability add.".into(),
+            Panel::Sources if filter.is_some() => {
+                "No source attached to this row. s shows all answer sources.".into()
+            }
+            Panel::Sources if app.working() && app.current_answer().is_none() => {
+                "Sources appear with the answer.".into()
+            }
+            Panel::Sources => match no_tools {
+                Some(kind) => {
+                    lines.push(line("No sources.", t.fg(t.warn)));
+                    lines.push(Line::raw(""));
+                    format!(
+                        "{} answered without tools, so nothing here was looked up.",
+                        kind.label()
+                    )
                 }
-                Panel::Sources => "No sources cited for this answer.",
-                Panel::Activity => "No activity recorded yet.",
-                Panel::Evidence => "No evidence recorded yet.",
+                None => "No sources cited for this answer.".into(),
             },
-            t.dim(),
+            Panel::Activity => "No activity recorded yet.".into(),
+            Panel::Evidence => "No evidence recorded yet.".into(),
+        };
+        lines.extend(document::wrap(
+            &[Span::styled(why, t.dim())],
+            content.width,
+            "",
+            "",
+            true,
         ));
         text_block(f, content, lines, app.panel_scroll);
-    } else if app.expanded {
-        if let Some((title, detail, failed)) = rows.get(app.item) {
+    } else if app.expanded && focused {
+        if let Some(row) = rows.get(app.item) {
             let mut lines = vec![
-                line(title, if *failed { t.fg(t.fail) } else { t.bold() }),
+                line(&row.title, if row.failed { t.fg(t.fail) } else { t.bold() }),
                 Line::raw(""),
             ];
-            lines.extend(captured_text(detail, t, content.width));
+            lines.extend(captured_text(&row.detail, t, content.width));
             text_block(f, content, lines, app.panel_scroll);
         }
     } else {
+        let count = rows.len();
+        // At rest the steps follow the work: the newest stays in view.
+        let skip = if !focused && panel == Panel::Activity {
+            count.saturating_sub(content.height as usize)
+        } else {
+            0
+        };
         let items: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .map(|(index, (title, detail, failed))| {
-                ListItem::new(vec![
-                    line(title, if *failed { t.fg(t.fail) } else { t.text() }),
-                    line(
-                        if panel == Panel::Activity {
-                            app.activity()
-                                .get(app.activity().len().saturating_sub(index + 1))
-                                .map(|a| a.actor.as_str())
-                                .unwrap_or("")
-                        } else {
-                            detail.lines().next().unwrap_or("")
-                        },
-                        t.dim(),
-                    ),
-                    Line::raw(""),
-                ])
-            })
+            .into_iter()
+            .skip(skip)
+            .map(|row| ListItem::new(row.lines))
             .collect();
-        let mut selection = ListState::default().with_selected(Some(app.item.min(rows.len() - 1)));
+        let mut selection =
+            ListState::default().with_selected(focused.then(|| app.item.min(count - 1)));
         f.render_stateful_widget(
             List::new(items)
-                .highlight_style(t.text().bg(t.sel))
-                .highlight_symbol("▎ "),
+                .highlight_style(Style::new().bg(t.sel))
+                .highlight_symbol("▎ ")
+                .highlight_spacing(HighlightSpacing::Always),
             content,
             &mut selection,
         );

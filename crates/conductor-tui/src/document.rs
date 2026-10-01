@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::Paragraph,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -457,18 +457,11 @@ pub fn draw(
     text: Vec<Line<'static>>,
     scroll: u16,
     title: &str,
+    focused: bool,
     t: &Theme,
 ) {
-    let area = Rect {
-        width: area.width.min(MAX_WIDTH),
-        ..area
-    };
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(t.fg(t.line))
-        .padding(Padding::horizontal(1))
-        .title(format!(" {title} "))
-        .title_style(t.fg(t.accent));
+    // The pane fills its column so the frame stays put; the text inside keeps a readable width.
+    let mut block = crate::workspace::pane(t, title, focused);
     let inner = block.inner(area);
     let max = text
         .len()
@@ -477,7 +470,7 @@ pub fn draw(
     let scroll = scroll.min(max);
     if max > 0 {
         block = block.title_bottom(format!(
-            " {}–{} of {} · ↑↓ scroll ",
+            " {}–{} of {} ",
             scroll as usize + 1,
             (scroll as usize + inner.height as usize).min(text.len()),
             text.len()

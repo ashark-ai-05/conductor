@@ -143,18 +143,22 @@ impl View {
     }
 }
 
-pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) {
+pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bool, t: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     if view.series.is_some() {
-        draw_series(f, area, view, selected, t);
+        draw_series(f, area, view, selected, focused, t);
         return;
     }
     if view.kind == "Key facts" {
-        draw_facts(f, area, view, selected, t);
+        draw_facts(f, area, view, selected, focused, t);
         return;
     }
+    let block = crate::workspace::pane(t, view.kind, focused);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let area = inner;
     let summary = Paragraph::new(clean(&view.summary)).wrap(Wrap { trim: false });
     // The summary remains available in full in the text view. Reserve space for rows.
     let summary_height = summary
@@ -162,18 +166,12 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) 
         .min(6)
         .min(area.height.saturating_sub(6) as usize) as u16;
     let [heading, subtitle, body] = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Length(summary_height + 1),
         Constraint::Min(0),
     ])
     .areas(area);
-    f.render_widget(
-        Paragraph::new(vec![
-            line(view.kind, t.fg(t.accent)),
-            line(&view.title, t.bold()),
-        ]),
-        heading,
-    );
+    f.render_widget(Paragraph::new(line(&view.title, t.bold())), heading);
     let [summary_area, overflow] =
         Layout::vertical([Constraint::Length(summary_height), Constraint::Length(1)])
             .areas(subtitle);
@@ -222,11 +220,7 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) 
         let row = &view.rows[selected];
         let mut lines = vec![
             line(
-                format!(
-                    "{} of {} · ↑↓ select · Enter evidence",
-                    selected + 1,
-                    view.rows.len()
-                ),
+                format!("{} of {}", selected + 1, view.rows.len()),
                 t.fg(t.accent),
             ),
             Line::raw(""),
@@ -289,7 +283,11 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) 
     let table = Table::new(rows, widths.iter().copied().map(Constraint::Length))
         .header(Row::new(headings).style(t.dim()).bottom_margin(1))
         .column_spacing(2)
-        .row_highlight_style(t.text().bg(t.sel))
+        .row_highlight_style(if focused {
+            t.text().bg(t.sel)
+        } else {
+            t.text()
+        })
         .highlight_symbol("▎ ");
     let mut state = TableState::default().with_selected(selected);
     f.render_stateful_widget(
@@ -401,32 +399,28 @@ pub fn height(view: &View, width: u16) -> u16 {
         })
         .sum::<usize>()
         .min(u16::MAX as usize) as u16;
-    summary.saturating_add(rows).saturating_add(5)
+    summary.saturating_add(rows).saturating_add(6)
 }
 
 struct FactsLayout {
-    width: u16,
     columns: usize,
     cell_width: u16,
     heading: Vec<Line<'static>>,
     cells: Vec<Vec<Line<'static>>>,
 }
 
-fn facts_layout(view: &View, width: u16, selected: usize, t: &Theme) -> FactsLayout {
+fn facts_layout(view: &View, width: u16, selected: usize, focused: bool, t: &Theme) -> FactsLayout {
     use crate::document;
     use ratatui::text::Span;
-    let width = width.min(document::MAX_WIDTH);
     let inner = width.saturating_sub(4).max(1);
-    let columns = if inner >= 72 && view.rows.len() <= 12 {
+    let columns: usize = if inner >= 120 && view.rows.len() <= 18 {
+        3
+    } else if inner >= 72 && view.rows.len() <= 12 {
         2
     } else {
         1
     };
-    let cell_width = if columns == 2 {
-        inner.saturating_sub(3) / 2
-    } else {
-        inner
-    };
+    let cell_width = inner.saturating_sub(3 * (columns as u16 - 1)) / columns as u16;
     let mut heading = document::wrap(
         &[Span::styled(clean(&view.title), t.bold())],
         inner,
@@ -468,7 +462,7 @@ fn facts_layout(view: &View, width: u16, selected: usize, t: &Theme) -> FactsLay
             } else {
                 format!("  {}", references(&row.sources))
             };
-            let value_style = if i == selected {
+            let value_style = if i == selected && focused {
                 t.bold().fg(t.accent)
             } else {
                 t.bold()
@@ -509,7 +503,6 @@ fn facts_layout(view: &View, width: u16, selected: usize, t: &Theme) -> FactsLay
         })
         .collect();
     FactsLayout {
-        width,
         columns,
         cell_width,
         heading,
@@ -518,7 +511,7 @@ fn facts_layout(view: &View, width: u16, selected: usize, t: &Theme) -> FactsLay
 }
 
 fn facts_height(view: &View, width: u16) -> u16 {
-    let layout = facts_layout(view, width, 0, &Theme::DARK);
+    let layout = facts_layout(view, width, 0, true, &Theme::DARK);
     let cells = layout
         .cells
         .chunks(layout.columns)
@@ -527,20 +520,10 @@ fn facts_height(view: &View, width: u16) -> u16 {
     (layout.heading.len() + cells + 2).min(u16::MAX as usize) as u16
 }
 
-fn draw_facts(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) {
-    use ratatui::widgets::{Block, Borders, Padding};
+fn draw_facts(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bool, t: &Theme) {
     let selected = selected.min(view.rows.len().saturating_sub(1));
-    let layout = facts_layout(view, area.width, selected, t);
-    let area = Rect {
-        width: layout.width,
-        ..area
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .padding(Padding::horizontal(1))
-        .border_style(t.fg(t.line))
-        .title(" Facts ")
-        .title_style(t.fg(t.accent));
+    let layout = facts_layout(view, area.width, selected, focused, t);
+    let block = crate::workspace::pane(t, "Facts", focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
     let heading_height =
@@ -576,7 +559,7 @@ fn draw_facts(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme
                 layout.cell_width.min(body.width),
                 height.min(body.bottom().saturating_sub(y)),
             );
-            let style = if band_index * layout.columns + column == selected {
+            let style = if focused && band_index * layout.columns + column == selected {
                 t.text().bg(t.sel)
             } else {
                 t.text()
@@ -678,10 +661,10 @@ pub fn draw_checks(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &
 }
 
 /// Ordered observations, with local selection and the exact value always available as text.
-fn draw_series(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) {
+fn draw_series(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bool, t: &Theme) {
     use ratatui::{
         symbols::Marker,
-        widgets::{Axis, Block, Borders, Chart, Dataset, GraphType},
+        widgets::{Axis, Chart, Dataset, GraphType},
     };
     let Some((unit, values)) = &view.series else {
         return;
@@ -690,15 +673,8 @@ fn draw_series(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Them
         return;
     }
     let selected = selected.min(values.len() - 1);
-    let block = Block::default()
-        .title(" Series · ↑↓ select · Enter source ")
-        .title_style(t.dim())
-        .borders(Borders::ALL)
-        .border_style(t.fg(t.line));
-    let inner = block.inner(area).inner(ratatui::layout::Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
+    let block = crate::workspace::pane(t, "Series", focused);
+    let inner = block.inner(area);
     f.render_widget(block, area);
     let summary = Paragraph::new(clean(&view.summary)).wrap(Wrap { trim: false });
     let summary_height = summary

@@ -494,7 +494,7 @@ fn workbench_anchors_the_composer_and_activity_hides_transport_metadata() {
     let output = render(&app, 140, 60);
     let follow = output
         .lines()
-        .position(|line| line.contains("f Follow up"))
+        .position(|line| line.contains("Ask about this answer"))
         .unwrap();
     assert!(
         (50..59).contains(&follow),
@@ -687,7 +687,7 @@ fn prose_uses_a_markdown_document_and_source_view_preserves_the_original() {
         assert!(!text.contains("](https://"));
         assert!(!text.contains("```sh"));
         assert!(text.contains("**literal**"));
-        assert!(text.contains("1 source · s inspect"));
+        assert!(text.contains("1 source"));
     }
     press(&mut app, KeyCode::Char('v'));
     let source = render(&app, 100, 40);
@@ -934,7 +934,7 @@ fn records_do_not_invent_verification_and_stay_bound_to_the_opened_snapshot() {
     let mut app = Workspace::demo();
     press(&mut app, KeyCode::Char('h'));
     let original = app.record_snapshot.clone();
-    assert!(render(&app, 100, 40).contains("not a hash-chained"));
+    assert!(render(&app, 80, 40).contains("hash-chained workflow receipt"));
     app.detail
         .as_mut()
         .unwrap()
@@ -1066,4 +1066,110 @@ fn picker_supports_copilot_models_and_amp_modes_at_narrow_widths() {
     assert_eq!(app.agent.mode.as_deref(), Some("example-mode"));
     assert!(app.agent.model.is_none());
     assert_eq!(app.text, "Compare retry strategies");
+}
+
+/// Columns of every cell drawn on the selection background.
+fn lit(app: &Workspace, width: u16, height: u16) -> Vec<u16> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|f| workspace::draw(f, app, &Theme::DARK))
+        .unwrap();
+    let b = terminal.backend().buffer();
+    let mut columns = vec![];
+    for y in 0..height {
+        for x in 0..width {
+            if b[(x, y)].bg == Theme::DARK.sel {
+                columns.push(x);
+            }
+        }
+    }
+    columns
+}
+fn working_demo() -> Workspace {
+    let mut app = Workspace::demo();
+    let d = app.detail.as_mut().unwrap();
+    d.summary.state = State::Working;
+    let turn = &mut d.question.as_mut().unwrap().turns[0];
+    turn.state = State::Working;
+    turn.answer = None;
+    turn.activity.truncate(2);
+    app
+}
+/// The row holding the bottom edge of the lowest box left of the side pane.
+fn composer_bottom(text: &str) -> usize {
+    let lines: Vec<_> = text.lines().collect();
+    lines
+        .iter()
+        .rposition(|line| line.chars().take(60).any(|c| c == '└'))
+        .unwrap()
+}
+
+#[test]
+fn the_request_box_stays_in_one_place_from_asking_to_the_answer() {
+    let mut ask = Workspace::demo();
+    press(&mut ask, KeyCode::Char('n'));
+    let asking = render(&ask, 140, 40);
+    assert!(asking.contains("What would you like to know?"));
+    assert!(asking.contains("Your request"));
+    assert!(asking.contains("This question"));
+    assert_eq!(asking.matches("F3").count(), 1, "one place for each key");
+    let working = render(&working_demo(), 140, 40);
+    let answered = render(&Workspace::demo(), 140, 40);
+    let bottom = composer_bottom(&asking);
+    assert!(bottom >= 36, "the request box sits at the bottom");
+    assert_eq!(composer_bottom(&working), bottom);
+    assert_eq!(composer_bottom(&answered), bottom);
+}
+
+#[test]
+fn the_wait_shows_the_steps_and_no_empty_answer_or_missing_sources() {
+    let app = working_demo();
+    assert_eq!(app.panel, None);
+    let text = render(&app, 140, 40);
+    assert!(text.contains("Working"));
+    assert!(text.contains("Question submitted"));
+    assert!(text.contains("Weather source returned…"));
+    assert!(!text.contains("Answer · Markdown"));
+    assert!(!text.contains("No sources cited"));
+    assert!(!text.contains("x Cancel lookup"));
+}
+
+#[test]
+fn sources_sit_beside_the_answer_and_keys_live_only_in_the_footer() {
+    let app = Workspace::demo();
+    assert_eq!(app.panel, None);
+    let text = render(&app, 140, 40);
+    assert!(text.contains("24°C / 75°F"));
+    assert!(text.contains("Example weather provider"));
+    assert!(text.contains("Sources 1") && text.contains("Activity 3"));
+    assert!(!text.contains("Esc back · Enter expand"));
+    assert!(!text.contains("h Source record"));
+    let footer = text.lines().last().unwrap();
+    assert!(footer.contains("f Follow up") && footer.contains("s Sources"));
+    assert!(footer.contains("Tab Tasks"));
+    assert_eq!(text.matches("f Follow up").count(), 1);
+    assert_eq!(text.matches("s Sources").count(), 1);
+}
+
+#[test]
+fn only_the_focused_pane_has_a_highlighted_row() {
+    let mut app = Workspace::demo();
+    let answer = lit(&app, 140, 40);
+    assert!(!answer.is_empty() && answer.iter().all(|x| *x < 90));
+    press(&mut app, KeyCode::Char('a'));
+    let panel = lit(&app, 140, 40);
+    assert!(!panel.is_empty() && panel.iter().all(|x| *x >= 90));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(lit(&app, 140, 40), answer);
+}
+
+#[test]
+fn an_agent_without_tools_says_nothing_was_looked_up() {
+    let mut app = Workspace::demo();
+    let q = app.detail.as_mut().unwrap().question.as_mut().unwrap();
+    q.agent.kind = conductor_model::agent::AgentKind::Copilot;
+    q.turns[0].answer.as_mut().unwrap().sources.clear();
+    let text = render(&app, 140, 40);
+    assert!(text.contains("Sources 0"));
+    assert!(text.contains("answered without tools"));
 }

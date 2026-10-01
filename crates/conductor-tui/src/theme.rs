@@ -82,6 +82,19 @@ impl Theme {
         self.text().add_modifier(Modifier::BOLD)
     }
 
+    /// The work-in-progress colour, breathing towards dim and back over sixteen frames.
+    pub fn pulse(&self, frame: usize) -> Style {
+        let step = (frame % 16) as u16;
+        let k = if step < 8 { step } else { 16 - step };
+        self.fg(match (self.run, self.dim) {
+            (Color::Rgb(r, g, b), Color::Rgb(r2, g2, b2)) => {
+                let mix = |a: u8, b: u8| ((a as u16 * (16 - k) + b as u16 * k) / 16) as u8;
+                Color::Rgb(mix(r, r2), mix(g, g2), mix(b, b2))
+            }
+            (run, _) => run,
+        })
+    }
+
     pub fn verdict(&self, v: Verdict) -> Style {
         self.fg(match v {
             Verdict::Passed => self.pass,
