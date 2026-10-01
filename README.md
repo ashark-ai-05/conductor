@@ -1,33 +1,22 @@
 # Conductor
 
-A terminal workspace for questions, local reports, and coding workflows. Use it
-standalone or inside [Herdr](https://github.com/herdrdev/herdr), with results,
-sources, activity, and review decisions in one place.
+**An agent workspace in your terminal.**
 
-**Status: v0.1.** Questions support Claude CLI and experimental Pi, GitHub Copilot,
-and Amp adapters with tools disabled. Use `F3` on a new question to choose an
-installed runtime and model (or Amp mode). Coding workflows retain Claude, scripts,
-and human review. Codex and live Jira/CI connections are not implemented.
+Ask questions, explore structured results, and review code changes with their
+evidence. Built in Rust. Runs standalone or inside [Herdr](https://github.com/herdrdev/herdr).
 
-## What it does
+![Conductor: selectable charts, source inspection, code review, clarification choices, and agent selection](docs/media/conductor.gif)
 
-- **Questions:** web answers and follow-ups with saved history and sources. Results
-  render as Markdown, facts, tables, or selectable numeric series. Clarification
-  requests offer selectable choices, a custom answer, and optional context.
-- **Local reports:** inspect Git status or register JSON, Markdown, and text files.
-  Capture, refresh, and display them without a model call.
-- **Coding workflows:** run YAML stages in a separate Git worktree, with retries,
-  independent checks, saved diffs, test reports, and human decisions. Each run
-  produces a receipt recording check results and gaps.
+*Actual terminal renderer, illustrative demo data. No model calls. [Still view](docs/screenshots/workbench-series.png).*
 
-Conductor selects and renders built-in widgets from validated data. Agents supply
-content; they do not generate executable UI.
+- **Useful results:** Markdown, tables, charts, choices, diffs, and test reports.
+- **Context that stays:** follow-ups, saved answers, sources, and activity in one task.
+- **Recorded checks:** coding workflows produce receipts showing what passed, failed, or was not checked.
+- **Local tools:** inspect Git changes and render reports without a model call.
 
 ## Install and try
 
-Requires Git and a current stable Rust toolchain. Questions require an authenticated
-`claude`, `pi`, `copilot`, or `amp` CLI on `PATH`; coding workflows use their configured agent. The demo
-and native operations need no agent.
+Requires Git and a current stable Rust toolchain.
 
 ```sh
 git clone https://github.com/ashark-ai-05/conductor.git
@@ -36,55 +25,46 @@ cargo install --locked --path .
 conductor ui --demo
 ```
 
-The demo uses illustrative data and makes no model calls. Press `Tab` to browse
-sample questions, clarification inputs, and a bug-fix review.
+The demo needs no account. Press **Tab** to explore sample tasks, **Enter** to
+inspect a selection, and **Esc** to return.
 
-To ask a real question, run this from your project directory:
+## Run Conductor
+
+From your project directory, choose an authenticated CLI installed on `PATH`:
 
 ```sh
-conductor ui --ask
-# Or choose your work runtime:
-conductor ui --ask --agent copilot
-conductor ui --ask --agent amp
+conductor ui --ask                     # Claude, with web tools
+conductor ui --ask --agent copilot     # GitHub Copilot CLI
+conductor ui --ask --agent amp         # Amp
+conductor ui --ask --agent pi          # Pi
+conductor ui --tasks                   # Return to saved tasks
 ```
 
-Type a question and press Enter. The default Claude adapter uses web tools with
-no project files supplied; no workflow setup is needed. Follow-ups stay in the same task.
+Try: **“Compare exponential backoff and fixed retries in a table.”**
 
-From a result, `n` starts a question, `w` opens configured workflows, `Tab` opens
-tasks, and `Ctrl+K` opens native actions. `a` shows activity; `v` shows full text
-or Markdown source. `h` opens a source record or workflow receipt. For questions,
-`s` opens sources and `f` follows up. For workflows, `e` opens evidence.
+**F3** chooses an agent and model before starting; Amp uses a mode instead.
+**f** follows up, **s** opens sources, **a** opens activity, and **h** opens the
+source record or workflow receipt. **Ctrl+K** opens local actions.
+
+**Early release:** Copilot, Amp, and Pi question adapters are experimental and run
+without tools, live web access, or repository editing. Coding workflows currently
+use Claude, scripts, and human review. Citations are not independently verified;
+workflow receipts cover the configured checks. [Adapter setup and limits →](docs/agent-workbench.md)
 
 ## Inside Herdr
 
-Requires Herdr 0.9.1 or later. From the Conductor checkout, in a Herdr session:
+With Herdr 0.9.1+ installed, run from this checkout in a Herdr session:
 
 ```sh
 cargo build --release --locked
 herdr plugin link "$PWD"
 ```
 
-The plugin adds **Ask Conductor**, **Open project tasks**, and **Return to
-Conductor task**. Workflow runs open in Herdr tabs; `g` visits the active agent.
-Rebuild after updating the checkout: the plugin uses `target/release/conductor`.
+Open **Ask Conductor** from Herdr's plugin menu. Rebuild after updating the
+checkout; the plugin uses `target/release/conductor`.
 
-## Local reports without an agent
-
-In a Git repository, `Ctrl+K` → **Repository changes** captures Git status.
-Register an existing project file to add another action, for example:
-
-```sh
-conductor capability add project.readme README.md --label "Project README"
-conductor capability run project.readme
-```
-
-The command prints a task ID and the command to open it. JSON objects render as
-labelled values, record arrays as tables, and Markdown as documents. Other text
-uses a literal viewer. `r` captures a fresh result and retains previous attempts.
-Files must be UTF-8, inside the project, and at most 64 KiB.
-
-## Run a coding workflow
+<details>
+<summary><strong>Run a coding workflow</strong></summary>
 
 From the target Git repository:
 
@@ -97,52 +77,14 @@ conductor doctor
 conductor run .conductor/workflows/build.yaml --spec .conductor/task.md
 ```
 
-Review the generated workflow and install any prerequisites reported by `init`
-and `doctor`. Workflows and prompts are read from the starting commit, so commit
-changes before running.
+Review the generated workflow and install the prerequisites reported by `doctor`.
+Workflow definitions are read from the starting commit. After a run, use
+`conductor receipt <run>` to read its checks or `conductor verify <run>` to verify
+record integrity. See the [bug-fix example](examples/sdlc-mock/README.md).
 
-The starter has one agent write failing tests and another implement the change,
-with checks rejecting edits to frozen tests. `init` detects Rust, JavaScript
-(Jest/Vitest), Python, Go, Maven, and Gradle. Checks read Cargo output or JUnit XML;
-the Rust starter also requires `cargo-mutants` for mutation testing.
+</details>
 
-CLI runs default to Herdr panes inside Herdr and headless execution elsewhere
-or in CI. Use `--executor herdr` or `--executor headless` to select explicitly.
-
-| Command | Purpose |
-|---|---|
-| `conductor receipt <run>` | Read the check results and recorded limitations |
-| `conductor verify <run>` | Verify record integrity without model calls |
-| `conductor approve <run> -m "What I checked"` | Accept a pending human review; `reject` declines it |
-| `conductor deliver <run>` | Push a passed run and open a draft PR when GitHub credentials are available |
-| `conductor check-pr` | Verify that the reviewed branch ends at its delivered receipt |
-| `conductor serve --open` | Browse workflow timelines, receipts, and statistics |
-
-See `conductor --help` for all commands.
-
-## Evidence and limits
-
-Conductor runs workflow checks using definitions from the starting commit.
-Receipts record what passed, failed, or was not checked; their evidence is
-hash-chained and anchored in Git. A passing receipt covers the configured checks.
-
-Question citations are supplied by the agent. Matching captured web fetches are
-shown when available; cited claims are not independently verified. Question
-history and native captures are stored locally under `.conductor/`, separately
-from workflow receipts.
-
-## Guides and development
-
-- [Agent workbench: setup, controls, adapters, and limits](docs/agent-workbench.md)
-- [Proposed agent workbench: design, interactive mockup, and screenshots](docs/design/agent-workbench/README.md) — broader design study
-- [Workspace controls, result views, and clarification inputs](docs/task-workspace.md)
-- [Native capabilities and capture limits](docs/native-capabilities.md)
-- [Example workflow](examples/build.yaml) and [bug-fix example](examples/sdlc-mock/README.md)
-
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-Set `CONDUCTOR_HERDR_BIN` to include tests against a real Herdr installation.
+[Workspace guide](docs/agent-workbench.md) ·
+[Local reports](docs/native-capabilities.md) ·
+[Design study](docs/design/agent-workbench/README.md) ·
+[Animation source](docs/media/README.md)

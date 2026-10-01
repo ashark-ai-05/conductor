@@ -67,6 +67,30 @@ fn main() {
         ));
     }
     app.expanded = args.iter().any(|s| s == "expanded");
+    // Script actual key handling for documentation captures; no runtime behavior changes.
+    if let Some(index) = args.iter().position(|a| a == "--keys") {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        for key in args
+            .get(index + 1)
+            .expect("--keys requires comma-separated keys")
+            .split(',')
+        {
+            let code = match key {
+                "down" => KeyCode::Down,
+                "up" => KeyCode::Up,
+                "left" => KeyCode::Left,
+                "right" => KeyCode::Right,
+                "enter" => KeyCode::Enter,
+                "esc" => KeyCode::Esc,
+                "tab" => KeyCode::Tab,
+                "space" => KeyCode::Char(' '),
+                "f3" => KeyCode::F(3),
+                text if text.chars().count() == 1 => KeyCode::Char(text.chars().next().unwrap()),
+                _ => panic!("unknown capture key: {key}"),
+            };
+            app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+    }
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     if args.iter().any(|a| a == "--bench") {
         let mut timings = Vec::new();
