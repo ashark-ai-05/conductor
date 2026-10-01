@@ -62,6 +62,32 @@ Generate a cell snapshot with
 `cargo run -p conductor-tui --example workspace -- 140 38 series --json`.
 Replace `series` with `bug`; add `light` for the light palette.
 
+## One frame for a question (2026-10-02)
+
+Krunal's walk through a weather question on 2026-10-02 showed keys in four places, two
+highlighted rows with no focus cue, an empty answer box during the wait, and the request
+box jumping between screens. Approved the same day; the mockup is a private Claude design
+canvas, not a file in this repository.
+
+- The question sits on top, the answer in the middle, the request box at the bottom. The
+  box is in the same place when asking, waiting and following up.
+- From 120 columns the side pane stays open with tabs `Sources`, `Activity`, `Record`:
+  the steps while the agent works, the sources once there is an answer. Narrower panes
+  show it in place of the answer on `s`, `a` or `h`, as before.
+- Keys are listed only in the footer: the focused pane's on the left, the ones that work
+  everywhere on the right. No key was rebound.
+- Only the focused pane has the accent border and a highlighted row.
+- While working, a spinner turns, the step in progress pulses and a new step fades in.
+  Steps read oldest first.
+- An agent without tools says in the Sources tab that nothing was looked up.
+
+Workflow runs and native captures keep their earlier layout inside the new top bar and
+footer. The images below predate this change. Step times and "cited by" counts shown in
+the mockup are not built.
+
+Worked means: on the next three questions Krunal opens a source and sends a follow-up
+without a wrong key press. Stop means: he still hunts for the key.
+
 ## Runtime boundaries
 
 | Adapter | Available in this implementation | Limits |

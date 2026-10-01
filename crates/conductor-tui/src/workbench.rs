@@ -2,7 +2,7 @@
 use crate::{
     document,
     theme::Theme,
-    workspace::{Workspace, clean, line, text_block},
+    workspace::{Workspace, line, text_block},
 };
 use conductor_model::agent::{AgentAvailability, AgentKind, AgentSelection};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -324,13 +324,10 @@ pub fn draw_record(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     let Some((title, text)) = &app.record_snapshot else {
         return;
     };
-    let block = Block::default()
-        .title(format!(" {} · saved snapshot ", clean(title)))
-        .borders(Borders::TOP | Borders::LEFT)
-        .border_style(t.fg(t.line));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    let mut lines = vec![line("Esc back · ↑↓ scroll", t.dim()), Line::raw("")];
-    lines.extend(document::lines(text, inner.width, t, &[]));
-    text_block(f, inner, lines, app.panel_scroll);
+    let mut lines = vec![
+        line(format!("{title} · saved snapshot"), t.dim()),
+        Line::raw(""),
+    ];
+    lines.extend(document::lines(text, area.width, t, &[]));
+    text_block(f, area, lines, app.panel_scroll);
 }

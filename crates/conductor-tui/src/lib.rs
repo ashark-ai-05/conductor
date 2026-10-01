@@ -60,6 +60,11 @@ pub fn run_workspace(mut app: workspace::Workspace, theme: Theme) -> io::Result<
                 terminal.draw(|f| workspace::draw(f, &app, &theme))?;
                 dirty = false;
             }
+            // A spinner or a newly arrived step redraws every poll; a still screen does not.
+            if app.animating() {
+                app.advance();
+                dirty = true;
+            }
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
