@@ -128,6 +128,7 @@ from workflow receipts.
 
 ## Guides and development
 
+- [Proposed agent workbench: design, interactive mockup, and screenshots](docs/design/agent-workbench/README.md) — design only; not implemented
 - [Workspace controls, result views, and clarification inputs](docs/task-workspace.md)
 - [Native capabilities and capture limits](docs/native-capabilities.md)
 - [Example workflow](examples/build.yaml) and [bug-fix example](examples/sdlc-mock/README.md)
