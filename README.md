@@ -1,246 +1,141 @@
-# conductor
+# Conductor
 
-Agentic software work with receipts. Conductor runs coding agents from YAML workflows,
-in [herdr](https://github.com/ogulcancelik/herdr) panes when you want to watch, or headless
-in CI and overnight. It checks their work with checks the agents can't touch. Every run ends
-in a receipt that says what was proven, by which check, and what was not checked.
+A terminal workspace for questions, local reports, and coding workflows. Use it
+standalone or inside [Herdr](https://github.com/herdrdev/herdr), with results,
+sources, activity, and review decisions in one place.
 
-**Status: v0.1.** It runs build workflows on any project whose tests can write JUnit XML
-(pytest, jest, vitest, go via gotestsum, Maven, Gradle, and most others), and reads
-`cargo test` directly. Agents are `claude`.
+**Status: v0.1.** Claude CLI is the supported agent provider. Workflow stages also
+support scripts and human review. Other agent providers and live Jira/CI
+connections are not implemented.
 
-## Try it
+## What it does
 
-For a question or to inspect work in the terminal, run `cargo run -- ui`. Type your
-question and press Enter; Sources and Activity stay beside its answer. `n` starts a
-question, `w` starts a configured workflow, and `Tab` opens the task list. Questions use
-your authenticated Claude CLI with web tools and do not create a worktree or require
-approval. [Workspace controls and scope](docs/task-workspace.md).
+- **Questions:** web answers and follow-ups with saved history and sources. Results
+  render as Markdown, facts, or tables. Structured clarification requests offer
+  selectable choices, a custom answer, and optional context.
+- **Local reports:** inspect Git status or register JSON, Markdown, and text files.
+  Capture, refresh, and display them without a model call.
+- **Coding workflows:** run YAML stages in a separate Git worktree, with retries,
+  independent checks, saved diffs, test reports, and human decisions. Each run
+  produces a receipt recording check results and gaps.
 
-`cargo run -- ui --demo` previews weather facts, a city comparison, a forecast and a QA
-test report with illustrative data and no model calls. Use `Tab`, arrows and Enter to
-switch tasks. In a result, arrows select a fact or row; Enter opens its supporting
-sources or test evidence. `v` switches between the result layout and complete text.
+Conductor selects and renders built-in widgets from validated data. Agents supply
+content; they do not generate executable UI.
 
-```bash
-cargo install --path .
-cd your-project
-conductor init        # a starter workflow for your stack, prompts, policy and task file
+## Install and try
+
+Requires Git and a current stable Rust toolchain. Agent tasks also require an
+authenticated `claude` CLI on `PATH`; the demo and native operations do not.
+
+```sh
+git clone https://github.com/ashark-ai-05/conductor.git
+cd conductor
+cargo install --locked --path .
+conductor ui --demo
+```
+
+The demo uses illustrative data and makes no model calls. Press `Tab` to browse
+sample questions, clarification inputs, and a bug-fix review.
+
+To ask a real question, run this from your project directory:
+
+```sh
+conductor ui --ask
+```
+
+Type a question and press Enter. Questions use web tools with no project files
+supplied; no workflow setup is needed. Follow-ups stay in the same task.
+
+From a result, `n` starts a question, `w` opens configured workflows, `Tab` opens
+tasks, and `Ctrl+K` opens native actions. `a` shows activity; `v` shows full text
+or Markdown source. For questions, `s` opens sources and `f` follows up. For
+workflows, `e` opens evidence.
+
+## Inside Herdr
+
+Requires Herdr 0.9.1 or later. From the Conductor checkout, in a Herdr session:
+
+```sh
+cargo build --release --locked
+herdr plugin link "$PWD"
+```
+
+The plugin adds **Ask Conductor**, **Open project tasks**, and **Return to
+Conductor task**. Workflow runs open in Herdr tabs; `g` visits the active agent.
+Rebuild after updating the checkout: the plugin uses `target/release/conductor`.
+
+## Local reports without an agent
+
+In a Git repository, `Ctrl+K` → **Repository changes** captures Git status.
+Register an existing project file to add another action, for example:
+
+```sh
+conductor capability add project.readme README.md --label "Project README"
+conductor capability run project.readme
+```
+
+The command prints a task ID and the command to open it. JSON objects render as
+labelled values, record arrays as tables, and Markdown as documents. Other text
+uses a literal viewer. `r` captures a fresh result and retains previous attempts.
+Files must be UTF-8, inside the project, and at most 64 KiB.
+
+## Run a coding workflow
+
+From the target Git repository:
+
+```sh
+conductor init
 $EDITOR .conductor/task.md
-git add .conductor .gitignore && git commit -m "conductor"
-conductor doctor      # is everything a run needs here?
+git add .conductor .gitignore
+git commit -m "Configure Conductor"
+conductor doctor
 conductor run .conductor/workflows/build.yaml --spec .conductor/task.md
 ```
 
-The starter workflow has two stages. One agent writes failing tests for the task. A second
-agent makes them pass without being able to touch them. On Rust, conductor then checks that
-the tests catch bugs it injects into the change (mutation testing for other languages is
-not wired up yet).
+Review the generated workflow and install any prerequisites reported by `init`
+and `doctor`. Workflows and prompts are read from the starting commit, so commit
+changes before running.
 
-### Other languages
+The starter has one agent write failing tests and another implement the change,
+with checks rejecting edits to frozen tests. `init` detects Rust, JavaScript
+(Jest/Vitest), Python, Go, Maven, and Gradle. Checks read Cargo output or JUnit XML;
+the Rust starter also requires `cargo-mutants` for mutation testing.
 
-The test checks read JUnit XML, so nothing about them is language-specific. `init` detects
-Rust, JavaScript (vitest, jest), Python (pytest), Go, Maven and Gradle, and otherwise
-writes a starter to fill in. A check names where its report goes one of two ways:
+CLI runs default to Herdr panes inside Herdr and headless execution elsewhere
+or in CI. Use `--executor herdr` or `--executor headless` to select explicitly.
 
-```yaml
-# conductor gives the command a fresh file outside the repository
-- { type: command_assert, command: ["pytest", "--junitxml={{report}}"], parser: junit_xml,
-    assert: ["tests_failed == 0", "tests_run > 0"] }
-# or reads the runner's own report files, deleting old ones first
-- { type: command_assert, command: ["mvn", "test"], parser: junit_xml,
-    report: "**/target/surefire-reports/TEST-*.xml", assert: ["tests_failed == 0"] }
-```
-
-Runs happen in a fresh git checkout, so a workflow's `setup:` installs what a checkout
-doesn't carry, once per run: `setup: [["npm", "ci"]]`. What setup writes must be ignored by
-git (`node_modules/`), or the run halts rather than count it as an agent's change.
-
-## See a run
-
-```bash
-conductor serve --open
-```
-
-![A run as two lanes: what the agent did on the left, what conductor witnessed on the right](docs/screenshots/run.png)
-
-Every run is two lanes. The left one is what the agent did: each file it wrote, each
-command it ran, the tokens it spent. The right one is what conductor witnessed between:
-every check and its verdict, every retry, every halt. The agent never grades its own work,
-and here you can see who said what. The colour of an entry's edge is its evidence grade:
-witnessed by conductor, observed from the agent, measured, or only inferred.
-
-A run in progress updates as it happens. A finished one can be replayed event by event,
-and each attempt's diff is a click away, so a reviewer reads "try 1 wrote this, the check
-said no, try 2 changed these lines" instead of a final diff with no history.
-
-![Stats across runs: what catches the agent, cost per run, evidence mix](docs/screenshots/stats.png)
-
-The stats page is the lead's view: what stops agents, how each stage's tries end, cost
-per run and per verified change, and how much of the record is witnessed rather than
-observed or inferred. Everything is read from `.conductor/runs/`; the server writes
-nothing and listens on localhost.
-
-## A person in the loop, and evidence where the reviewer looks
-
-A stage can be a person. The run pauses until they decide, from the evidence, and their
-decision is the stage's check on the receipt:
-
-```yaml
-  - id: fix
-    agent: { kind: claude }
-    evidence: { to: "{{spec}}", files: ["logs/app.log"] }   # into the ticket, as it happens
-    gates:
-      - { type: command_assert, command: ["./scripts/deploy-and-test.sh"], parser: exit }
-  - id: review
-    agent: { kind: human, who: PO }
-    prompt_file: .conductor/prompts/review.md            # what they are asked to decide
-```
-
-`evidence` appends every check's command, verdict and output, plus the files named, to
-the ticket the run was given (`--spec tickets/BUG-101.md`), while the stage runs, so there
-is nothing to collect afterwards: the checks failing before the fix, each check with its
-output after it, the change itself, and the files the stage names. Only conductor writes
-there; an agent that changes the ticket fails the attempt and its words are dropped. The
-decision lands there too, and it needs a note saying what was checked. Decide from the run's
-page in `conductor serve`, with `y` / `d` in `conductor ui`, or with
-`conductor approve <run> --by PO -m "…"` and `conductor reject`.
-
-What the agent does is on the record as it happens, so a person watching can tell working
-from stuck. A tool the agent asks for that is outside `allowed_tools` is put to a person:
-the stage's `who`, else whoever started the run. The question shows the moment it is asked,
-on the run's page, in `conductor ui` (`y` / `d`), and for `conductor allow <run>` /
-`conductor deny <run> -m "…"`. The agent waits, and the stage clock stops with it; the
-answer and the time spent waiting are on the record. Nobody answering within a day is a
-deny in nobody's name.
-
-`examples/sdlc-mock/` is a Spring Boot service with three real bugs, a ticket for each, a
-local deploy that checks the ticket's acceptance criteria, and a log: the team's loop,
-small enough to run end to end in a minute. Its README says what it can and cannot prove.
-
-## Commands
-
-| Command | What it does |
+| Command | Purpose |
 |---|---|
-| `init`, `doctor` | Set up a repository, and check it and this machine are ready |
-| `run <workflow> --spec <file>` | Run a workflow in its own worktree and branch; in herdr, each run gets a tab with a live status pane and a pane per stage |
-| `receipt [<run>]` | Print a run's receipt |
-| `verify <run>` | Re-check a run's record with no model calls |
-| `deliver [<run>]` | Push a passed run's branch with its record and open a draft pull request with its receipt |
-| `check-pr` | In CI: check that a pull request's branch ends at a delivered run's receipt, from git alone |
-| `trace [<run>]`, `stats` | A run's timeline; what a repository's runs add up to |
-| `ui` | The terminal UI, including runs in progress (`--demo` for sample data) |
-| `approve`, `reject` | Decide a `human` stage the run is waiting on |
-| `serve` | The same runs in a browser: two lanes, replay, live, receipts, stats |
-| `pane …` | For agents inside a run: open, drive and close panes in the run's own tab |
+| `conductor receipt <run>` | Read the check results and recorded limitations |
+| `conductor verify <run>` | Verify record integrity without model calls |
+| `conductor approve <run> -m "What I checked"` | Accept a pending human review; `reject` declines it |
+| `conductor deliver <run>` | Push a passed run and open a draft PR when GitHub credentials are available |
+| `conductor check-pr` | Verify that the reviewed branch ends at its delivered receipt |
+| `conductor serve --open` | Browse workflow timelines, receipts, and statistics |
 
-## Delivering runs as pull requests
+See `conductor --help` for all commands.
 
-Add `deliver: { base: main }` to a workflow and every passed run becomes a draft pull
-request. Or run `conductor deliver <run>` yourself. A token comes from `GITHUB_TOKEN`,
-`GH_TOKEN` or `gh auth login`. Without one, conductor pushes the branch and writes the PR
-body to the run's `pr.md`.
+## Evidence and limits
 
-The branch's last commit holds the run's record. To have CI confirm that the receipt still
-describes the code under review:
+Conductor runs workflow checks using definitions from the starting commit.
+Receipts record what passed, failed, or was not checked; their evidence is
+hash-chained and anchored in Git. A passing receipt covers the configured checks.
 
-```yaml
-# .github/workflows/receipt.yml
-on: pull_request
-jobs:
-  receipt:
-    if: startsWith(github.head_ref, 'conductor/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }      # check-pr reads the branch's history
-      - run: cargo install --locked --git https://github.com/ashark-ai-05/conductor conductor
-      - run: conductor check-pr       # fails if anything was committed after the receipt
-```
+Question citations are supplied by the agent. Matching captured web fetches are
+shown when available; cited claims are not independently verified. Question
+history and native captures are stored locally under `.conductor/`, separately
+from workflow receipts.
 
-## Telemetry
+## Guides and development
 
-Set `CONDUCTOR_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) and each finished run is
-sent to that collector as OTLP traces, logs and metrics. Commands and paths agents used are
-cut to their first word unless `CONDUCTOR_OTLP_CONTENT=1`. `conductor trace` and
-`conductor stats` work without a collector.
+- [Workspace controls, result views, and clarification inputs](docs/task-workspace.md)
+- [Native capabilities and capture limits](docs/native-capabilities.md)
+- [Example workflow](examples/build.yaml) and [bug-fix example](examples/sdlc-mock/README.md)
 
-## How it fits together
-
-- **A receipt may only say "passed" about a check that could have failed.** Checks run in
-  conductor's own process, from the commit the run started at.
-- **Evidence is labelled by where it came from.** It is `witnessed` (conductor ran it),
-  `observed` (the agent's own log), `measured` (token usage) or `inferred` (herdr's view of
-  an agent, used only for scheduling).
-- **The record is hash-chained and anchored in a commit trailer.** `verify` and `check-pr`
-  re-check it.
-
-## Layout
-
-| Path | What |
-|---|---|
-| `crates/conductor-model` | Workflows and validation, the evidence chain, receipts, UI view models |
-| `crates/conductor-checks` | Checks: scope, command assertions over test results (cargo, JUnit XML), mutation testing |
-| `crates/conductor-engine` | Runs, retries, worktrees, receipts, herdr and headless executors, traces, metrics, delivery |
-| `crates/conductor-herdr` | The herdr CLI driver |
-| `crates/conductor-tui` | The Ratatui interface |
-| `src/` | The `conductor` command |
-| `docs/` | Spec, product definition, assessment, design mockup, a real receipt |
-
-## Checks
-
-```bash
+```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace   # set CONDUCTOR_HERDR_BIN to include the tests against real herdr
+cargo test --workspace
 ```
 
-### In Herdr
-
-Build with `cargo build --release --locked`, then run `herdr plugin link /absolute/path/to/conductor`
-from your Herdr session. The plugin adds **Ask Conductor**, **Open project tasks**, and
-**Return to Conductor task**. Run views use the full pane; `Tab` opens the task drawer
-and `g` visits the agent. See [the task workspace guide](docs/task-workspace.md#herdr-integration).
-
-### Native operations and dynamic report sources
-
-Open **Actions** with `Ctrl+K` from the request composer or any task. The drawer loads
-currently registered capabilities; `r` reloads it after registration changes. Enter
-runs the selected operation. **Repository changes** is available without setup and
-captures Git status with no model call.
-
-Register any JSON or text report inside the project under a name you choose:
-
-```sh
-conductor capability add qa.failures examples/capabilities/failures.json --label 'QA failures (sample)'
-conductor capability list
-conductor capability run qa.failures
-# Use the printed task ID:
-conductor ui --run n-...
-```
-
-The sample contains illustrative records, not the results of tests run against this
-repository. Use a real local report file for your own data. JSON records use the existing
-table, objects use labelled values, and other shapes or text retain a readable full
-payload. Source content cannot create commands, widgets or verified check results.
-
-In a native task, `r` captures another attempt, Enter inspects the selected result's
-saved evidence, `a` shows activity, and `v` shows the full payload. Refresh does not
-start an agent. A failed read retains the last successful result with its original
-capture time. All attempts are retained under `.conductor/native-tasks/`.
-
-```sh
-conductor capability refresh n-...
-conductor capability show n-...        # reads the saved record; never reruns it
-conductor capability remove qa.failures
-```
-
-Removing a capability leaves its results readable. Changing its descriptor invalidates
-old task bindings; start a new task from Actions to use the new definition. Registrations
-are stored in `.conductor/capabilities/`. Names are data rather than a hardcoded list of
-business tasks. This first slice includes native Git status and selected-file adapters;
-Jira/CI connections, autonomous plan composition and generated-program execution are
-not implemented yet. Existing questions and workflow runs remain available.
-
-Reports are limited to 64 KiB of UTF-8 text per capture and 32 attempts per native task.
-Captured hashes identify payloads; these records are not signed or Git-anchored receipts.
+Set `CONDUCTOR_HERDR_BIN` to include tests against a real Herdr installation.
