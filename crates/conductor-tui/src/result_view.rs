@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 pub struct View {
+    pub series: Option<(String, Vec<f64>)>,
     pub title: String,
     pub summary: String,
     pub kind: &'static str,
@@ -27,11 +28,33 @@ pub struct Entry {
 impl View {
     pub fn answer(p: Presentation) -> Self {
         match p {
+            Presentation::Series {
+                title,
+                summary,
+                unit,
+                points,
+            } => Self {
+                series: Some((unit.clone(), points.iter().map(|p| p.value).collect())),
+                title,
+                summary,
+                kind: "Series",
+                columns: vec!["Period".into(), unit.clone(), "Detail".into()],
+                rows: points
+                    .into_iter()
+                    .map(|p| Entry {
+                        cells: vec![p.label, format!("{} {}", p.value, unit), p.detail],
+                        sources: p.sources,
+                        evidence: None,
+                        failed: false,
+                    })
+                    .collect(),
+            },
             Presentation::Facts {
                 title,
                 summary,
                 facts,
             } => Self {
+                series: None,
                 title,
                 summary,
                 kind: "Key facts",
@@ -52,6 +75,7 @@ impl View {
                 columns,
                 rows,
             } => Self {
+                series: None,
                 title,
                 summary,
                 kind: "Table",
@@ -71,6 +95,7 @@ impl View {
     pub fn tests(results: &TestResults) -> Self {
         let count = |name: &str| results.cases.iter().filter(|c| c.outcome == name).count();
         Self {
+            series: None,
             title: if results.cases.is_empty() {
                 "No test cases recorded".into()
             } else {
@@ -120,6 +145,10 @@ impl View {
 
 pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) {
     if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if view.series.is_some() {
+        draw_series(f, area, view, selected, t);
         return;
     }
     if view.kind == "Key facts" {
@@ -203,10 +232,18 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) 
             Line::raw(""),
         ];
         for (label, value) in view.columns.iter().zip(&row.cells) {
-            lines.push(line(label, t.dim()));
-            lines.push(line(
-                value,
-                if row.failed { t.fg(t.fail) } else { t.bold() },
+            lines.extend(crate::document::wrap(
+                &[
+                    ratatui::text::Span::styled(format!("{}: ", clean(label)), t.dim()),
+                    ratatui::text::Span::styled(
+                        clean(value),
+                        if row.failed { t.fg(t.fail) } else { t.bold() },
+                    ),
+                ],
+                body.width.max(1),
+                "",
+                "  ",
+                true,
             ));
             lines.push(Line::raw(""));
         }
@@ -294,6 +331,9 @@ fn wrap(text: &str, width: u16) -> Vec<Line<'static>> {
 
 /// Preferred content height, so a short answer does not push follow-up to the pane bottom.
 pub fn height(view: &View, width: u16) -> u16 {
+    if view.series.is_some() {
+        return 22;
+    }
     if view.kind == "Key facts" {
         return facts_height(view, width);
     }
@@ -634,5 +674,118 @@ pub fn draw_checks(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &
             .highlight_style(t.text().bg(t.sel)),
         body,
         &mut state,
+    );
+}
+
+/// Ordered observations, with local selection and the exact value always available as text.
+fn draw_series(f: &mut Frame, area: Rect, view: &View, selected: usize, t: &Theme) {
+    use ratatui::{
+        symbols::Marker,
+        widgets::{Axis, Block, Borders, Chart, Dataset, GraphType},
+    };
+    let Some((unit, values)) = &view.series else {
+        return;
+    };
+    if values.len() < 2 || view.rows.is_empty() {
+        return;
+    }
+    let selected = selected.min(values.len() - 1);
+    let block = Block::default()
+        .title(" Series · ↑↓ select · Enter source ")
+        .title_style(t.dim())
+        .borders(Borders::ALL)
+        .border_style(t.fg(t.line));
+    let inner = block.inner(area).inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    f.render_widget(block, area);
+    let summary = Paragraph::new(clean(&view.summary)).wrap(Wrap { trim: false });
+    let summary_height = summary
+        .line_count(inner.width.max(1))
+        .min(3)
+        .min(inner.height.saturating_sub(5) as usize) as u16;
+    let [title, summary_area, selection, chart] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(summary_height + 1),
+        Constraint::Length(3),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(clean(&view.title)).style(t.bold()), title);
+    let truncated = summary.line_count(inner.width.max(1)) > summary_height as usize;
+    let [context, more] =
+        Layout::vertical([Constraint::Length(summary_height), Constraint::Min(0)])
+            .areas(summary_area);
+    f.render_widget(summary.style(t.dim()), context);
+    if truncated {
+        f.render_widget(
+            Paragraph::new("… v full text for all context").style(t.fg(t.accent)),
+            more,
+        );
+    }
+    let row = &view.rows[selected];
+    f.render_widget(
+        Paragraph::new(vec![
+            line(
+                format!(
+                    "{}   {}   {}",
+                    row.cells[0],
+                    row.cells[1],
+                    references(&row.sources)
+                ),
+                t.bold().fg(t.accent),
+            ),
+            line(&row.cells[2], t.dim()),
+        ])
+        .wrap(Wrap { trim: false }),
+        selection,
+    );
+    if chart.width < 28 || chart.height < 4 {
+        return;
+    }
+    let points: Vec<_> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i as f64, *v))
+        .collect();
+    let highlight = [points[selected]];
+    let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let pad = ((high - low) * 0.15).max(1.0);
+    let datasets = vec![
+        Dataset::default()
+            .graph_type(GraphType::Line)
+            .marker(Marker::HalfBlock)
+            .style(t.fg(t.accent))
+            .data(&points),
+        Dataset::default()
+            .marker(Marker::Block)
+            .style(t.fg(t.text))
+            .data(&highlight),
+    ];
+    f.render_widget(
+        Chart::new(datasets)
+            .style(t.text().bg(t.background))
+            .x_axis(
+                Axis::default()
+                    .style(t.fg(t.line))
+                    .bounds([0.0, (values.len() - 1) as f64])
+                    .labels([
+                        line(&view.rows[0].cells[0], t.dim()),
+                        line(&view.rows[values.len() - 1].cells[0], t.dim()),
+                    ]),
+            )
+            .y_axis(
+                Axis::default()
+                    .title(line(unit, t.dim()))
+                    .style(t.fg(t.line))
+                    .bounds([low - pad, high + pad])
+                    .labels([
+                        line(format!("{:.1}", low - pad), t.dim()),
+                        line(format!("{:.1}", high + pad), t.dim()),
+                    ]),
+            ),
+        chart,
     );
 }

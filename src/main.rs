@@ -42,6 +42,7 @@ usage:
                                      show a run's stages, attempts and checks as a
                                      trace; --export sends it over OTLP
   conductor ui [--run <id> | --ask | --tasks] [--repo <path>] [--demo] [--light]
+               [--agent claude|pi|copilot|amp] [--model <id>] [--agent-mode <mode>]
                                      ask a question or inspect a task with its result,
                                      sources, evidence and activity
   conductor capability list         discover native operations (no agent calls)
@@ -825,11 +826,23 @@ fn ui(args: &[String]) -> Result<ExitCode> {
     let mut focused = false;
     let mut tasks = false;
     let mut repo = None;
+    let mut agent = conductor_model::agent::AgentSelection::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--demo" => demo = true,
             "--ask" => focused = true,
+            "--agent" => {
+                agent.kind = conductor_model::agent::AgentKind::parse(
+                    it.next()
+                        .context("--agent needs claude, pi, copilot, or amp")?,
+                )
+                .map_err(anyhow::Error::msg)?
+            }
+            "--model" => agent.model = Some(it.next().context("--model needs a model ID")?.clone()),
+            "--agent-mode" => {
+                agent.mode = Some(it.next().context("--agent-mode needs an Amp mode")?.clone())
+            }
             "--tasks" => tasks = true,
             "--repo" => repo = Some(PathBuf::from(it.next().context("--repo needs a path")?)),
             "--light" => theme = Theme::LIGHT,
@@ -846,6 +859,13 @@ fn ui(args: &[String]) -> Result<ExitCode> {
             repo.unwrap_or(repo_root().unwrap_or(std::env::current_dir()?)),
         )))
     };
+    agent.validate().map_err(anyhow::Error::msg)?;
+    if run_id.is_some() && agent != Default::default() {
+        bail!(
+            "An existing task keeps its saved agent. Use --ask to start a new question with --agent / --model."
+        );
+    }
+    app.agent = agent;
     app.focused = focused || run_id.is_some();
     if tasks {
         app.input = None;

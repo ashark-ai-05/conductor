@@ -105,6 +105,7 @@ impl TaskSource for RepoRuns {
         if id.starts_with("q-") {
             let q = question::read(&self.0, id)?;
             return Some(TaskDetail {
+                receipt: None,
                 native: None,
                 summary: TaskSummary {
                     id: id.into(),
@@ -112,7 +113,7 @@ impl TaskSource for RepoRuns {
                     kind: "Question".into(),
                     state: q.turns.last().map(|t| t.state).unwrap_or(State::Stopped),
                 },
-                context: "Web question · No project files supplied".into(),
+                context: q.agent.kind.scope().into(),
                 body: String::new(),
                 evidence: vec![],
                 activity: vec![],
@@ -296,6 +297,7 @@ impl TaskSource for RepoRuns {
             }
         }
         Some(TaskDetail {
+            receipt,
             native: None,
             summary: TaskSummary {
                 id: id.into(),
@@ -314,6 +316,23 @@ impl TaskSource for RepoRuns {
         })
     }
 
+    fn agents(&self) -> Vec<conductor_model::agent::AgentAvailability> {
+        conductor_engine::question_agent::available()
+    }
+    fn question_with_agent(
+        &self,
+        parent: Option<&str>,
+        input: &str,
+        agent: &conductor_model::agent::AgentSelection,
+    ) -> Result<String, String> {
+        question::launch_with_agent(
+            &self.0,
+            &std::env::current_exe().map_err(|e| e.to_string())?,
+            parent,
+            input,
+            agent,
+        )
+    }
     fn question(&self, parent: Option<&str>, input: &str) -> Result<String, String> {
         question::launch(
             &self.0,

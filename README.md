@@ -4,15 +4,16 @@ A terminal workspace for questions, local reports, and coding workflows. Use it
 standalone or inside [Herdr](https://github.com/herdrdev/herdr), with results,
 sources, activity, and review decisions in one place.
 
-**Status: v0.1.** Claude CLI is the supported agent provider. Workflow stages also
-support scripts and human review. Other agent providers and live Jira/CI
-connections are not implemented.
+**Status: v0.1.** Questions support Claude CLI and experimental Pi, GitHub Copilot,
+and Amp adapters with tools disabled. Use `F3` on a new question to choose an
+installed runtime and model (or Amp mode). Coding workflows retain Claude, scripts,
+and human review. Codex and live Jira/CI connections are not implemented.
 
 ## What it does
 
 - **Questions:** web answers and follow-ups with saved history and sources. Results
-  render as Markdown, facts, or tables. Structured clarification requests offer
-  selectable choices, a custom answer, and optional context.
+  render as Markdown, facts, tables, or selectable numeric series. Clarification
+  requests offer selectable choices, a custom answer, and optional context.
 - **Local reports:** inspect Git status or register JSON, Markdown, and text files.
   Capture, refresh, and display them without a model call.
 - **Coding workflows:** run YAML stages in a separate Git worktree, with retries,
@@ -24,8 +25,9 @@ content; they do not generate executable UI.
 
 ## Install and try
 
-Requires Git and a current stable Rust toolchain. Agent tasks also require an
-authenticated `claude` CLI on `PATH`; the demo and native operations do not.
+Requires Git and a current stable Rust toolchain. Questions require an authenticated
+`claude`, `pi`, `copilot`, or `amp` CLI on `PATH`; coding workflows use their configured agent. The demo
+and native operations need no agent.
 
 ```sh
 git clone https://github.com/ashark-ai-05/conductor.git
@@ -41,15 +43,18 @@ To ask a real question, run this from your project directory:
 
 ```sh
 conductor ui --ask
+# Or choose your work runtime:
+conductor ui --ask --agent copilot
+conductor ui --ask --agent amp
 ```
 
-Type a question and press Enter. Questions use web tools with no project files
-supplied; no workflow setup is needed. Follow-ups stay in the same task.
+Type a question and press Enter. The default Claude adapter uses web tools with
+no project files supplied; no workflow setup is needed. Follow-ups stay in the same task.
 
 From a result, `n` starts a question, `w` opens configured workflows, `Tab` opens
 tasks, and `Ctrl+K` opens native actions. `a` shows activity; `v` shows full text
-or Markdown source. For questions, `s` opens sources and `f` follows up. For
-workflows, `e` opens evidence.
+or Markdown source. `h` opens a source record or workflow receipt. For questions,
+`s` opens sources and `f` follows up. For workflows, `e` opens evidence.
 
 ## Inside Herdr
 
@@ -128,7 +133,8 @@ from workflow receipts.
 
 ## Guides and development
 
-- [Proposed agent workbench: design, interactive mockup, and screenshots](docs/design/agent-workbench/README.md) — design only; not implemented
+- [Agent workbench: setup, controls, adapters, and limits](docs/agent-workbench.md)
+- [Proposed agent workbench: design, interactive mockup, and screenshots](docs/design/agent-workbench/README.md) — broader design study
 - [Workspace controls, result views, and clarification inputs](docs/task-workspace.md)
 - [Native capabilities and capture limits](docs/native-capabilities.md)
 - [Example workflow](examples/build.yaml) and [bug-fix example](examples/sdlc-mock/README.md)

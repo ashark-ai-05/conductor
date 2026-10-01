@@ -1,11 +1,13 @@
-//! Colours, taken from the design mockup (docs/mockup.html) so the terminal and the mockup
-//! stay one design.
+//! Terminal palette for the agent workbench; meaning never relies on colour alone.
 
 use conductor_model::{Source, Verdict};
 use ratatui::style::{Color, Modifier, Style};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
+    pub background: Color,
+    pub surface: Color,
+    pub fail_bg: Color,
     pub text: Color,
     pub dim: Color,
     pub faint: Color,
@@ -23,13 +25,16 @@ pub struct Theme {
 
 impl Theme {
     pub const DARK: Theme = Theme {
+        background: Color::Rgb(0x17, 0x1b, 0x20),
+        surface: Color::Rgb(0x1d, 0x23, 0x2a),
+        fail_bg: Color::Rgb(0x36, 0x24, 0x29),
         text: Color::Rgb(0xd8, 0xdf, 0xe8),
         dim: Color::Rgb(0x8a, 0x97, 0xa7),
         faint: Color::Rgb(0x5b, 0x66, 0x74),
         line: Color::Rgb(0x29, 0x31, 0x3b),
-        accent: Color::Rgb(0x8e, 0xa5, 0xff),
+        accent: Color::Rgb(0x8f, 0xba, 0xfa),
         sel: Color::Rgb(0x1c, 0x24, 0x36),
-        pass: Color::Rgb(0x72, 0xc9, 0x8f),
+        pass: Color::Rgb(0x82, 0xd9, 0xc2),
         fail: Color::Rgb(0xf0, 0x7d, 0x7d),
         warn: Color::Rgb(0xe3, 0xb5, 0x60),
         run: Color::Rgb(0x8e, 0xa5, 0xff),
@@ -39,6 +44,9 @@ impl Theme {
     };
 
     pub const LIGHT: Theme = Theme {
+        background: Color::Rgb(0xfa, 0xfb, 0xfc),
+        surface: Color::Rgb(0xf0, 0xf3, 0xf5),
+        fail_bg: Color::Rgb(0xfa, 0xe9, 0xe9),
         text: Color::Rgb(0x1c, 0x24, 0x30),
         dim: Color::Rgb(0x5f, 0x6a, 0x7a),
         faint: Color::Rgb(0x8f, 0x9a, 0xa8),

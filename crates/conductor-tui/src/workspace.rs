@@ -4,6 +4,7 @@ use crate::{
     clarification, document,
     result_view::{self, View},
     theme::Theme,
+    workbench,
 };
 use conductor_model::capability::{Available, Binding};
 use conductor_model::interaction::{InputBinding, InputRequest, InputResponse};
@@ -42,6 +43,20 @@ pub trait TaskSource: RunSource + Send + Sync {
     fn invoke(&self, _binding: &Binding, _parent: Option<&str>) -> Result<String, String> {
         Err("Native operations are unavailable here.".into())
     }
+    fn agents(&self) -> Vec<conductor_model::agent::AgentAvailability> {
+        vec![]
+    }
+    fn question_with_agent(
+        &self,
+        parent: Option<&str>,
+        input: &str,
+        agent: &conductor_model::agent::AgentSelection,
+    ) -> Result<String, String> {
+        if agent != &Default::default() {
+            return Err("This source does not support agent selection.".into());
+        }
+        self.question(parent, input)
+    }
     fn tasks(&self) -> Vec<TaskSummary>;
     fn task(&self, id: &str) -> Option<TaskDetail>;
     fn question(&self, parent: Option<&str>, input: &str) -> Result<String, String>;
@@ -59,6 +74,7 @@ pub trait TaskSource: RunSource + Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
+    Record,
     Capabilities,
     Sources,
     Activity,
@@ -75,6 +91,10 @@ pub enum Input {
 }
 
 pub struct Workspace {
+    pub agent: conductor_model::agent::AgentSelection,
+    pub agent_picker: Option<workbench::AgentPicker>,
+    pub record_snapshot: Option<(String, String)>,
+    follow_up_drafts: std::collections::HashMap<String, String>,
     source: Option<Arc<dyn TaskSource>>,
     pub tasks: Vec<TaskSummary>,
     pub capabilities: Vec<Available>,
@@ -116,6 +136,10 @@ impl Workspace {
         let workflows = source.workflows();
         let host = source.host();
         Self {
+            agent: Default::default(),
+            agent_picker: None,
+            record_snapshot: None,
+            follow_up_drafts: Default::default(),
             capabilities: vec![],
             host,
             source: Some(source),
@@ -155,6 +179,10 @@ impl Workspace {
     pub fn demo() -> Self {
         let detail = demo_task();
         Self {
+            agent: Default::default(),
+            agent_picker: None,
+            record_snapshot: None,
+            follow_up_drafts: Default::default(),
             capabilities: vec![],
             source: None,
             host: None,
@@ -162,6 +190,7 @@ impl Workspace {
                 detail.summary.clone(),
                 demo_comparison(false).summary,
                 demo_comparison(true).summary,
+                demo_series().summary,
                 demo_tests().summary,
                 demo_bug().summary,
                 demo_clarification().summary,
@@ -199,6 +228,7 @@ impl Workspace {
     }
 
     pub fn open(&mut self, id: &str) -> bool {
+        self.keep_follow_up();
         let detail = self
             .source
             .as_ref()
@@ -210,6 +240,7 @@ impl Workspace {
                         "q-clarification" => Some(demo_clarification()),
                         "q-comparison" => Some(demo_comparison(false)),
                         "q-forecast" => Some(demo_comparison(true)),
+                        "q-series" => Some(demo_series()),
                         "test-demo" => Some(demo_tests()),
                         "bug-demo" => Some(demo_bug()),
                         _ => None,
@@ -253,6 +284,7 @@ impl Workspace {
         self.source_filter = None;
         self.selection_detail = None;
         self.status = None;
+        self.record_snapshot = None;
         self.sync_clarification();
         true
     }
@@ -261,6 +293,10 @@ impl Workspace {
         if let Some(rx) = &self.pending {
             match rx.try_recv() {
                 Ok(Ok(id)) => {
+                    if self.input == Some(Input::FollowUp) {
+                        self.follow_up_drafts.remove(&id);
+                        self.input = None;
+                    }
                     self.pending = None;
                     self.open(&id);
                 }
@@ -621,6 +657,7 @@ impl Workspace {
 
     fn items(&self) -> usize {
         match self.panel {
+            Some(Panel::Record) => 0,
             Some(Panel::Capabilities) => self.capabilities.len(),
             Some(Panel::Sources) => self
                 .current_answer()
@@ -643,12 +680,32 @@ impl Workspace {
             .unwrap_or(&[])
     }
 
+    fn keep_follow_up(&mut self) {
+        if self.input == Some(Input::FollowUp)
+            && let Some(d) = &self.detail
+        {
+            self.follow_up_drafts
+                .insert(d.summary.id.clone(), self.text.clone());
+        }
+    }
+
     fn compose(&mut self, input: Input) {
+        self.keep_follow_up();
         self.input = Some(input);
-        self.text.clear();
-        self.cursor = 0;
+        self.text = if input == Input::FollowUp {
+            self.detail
+                .as_ref()
+                .and_then(|d| self.follow_up_drafts.get(&d.summary.id))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        self.cursor = self.text.len();
         self.panel = None;
-        self.scroll = 0;
+        if input != Input::FollowUp {
+            self.scroll = 0;
+        }
         self.list_focus = false;
         self.status = None;
         self.workflow_focus = false;
@@ -697,8 +754,12 @@ impl Workspace {
         if self.panel == Some(Panel::Capabilities) {
             self.load_capabilities();
         }
+        if self.panel == Some(Panel::Record) {
+            self.record_snapshot = Some(workbench::record(self));
+        }
         self.item = 0;
-        self.expanded = self.panel == Some(Panel::Sources) && self.items() == 1;
+        self.expanded = self.panel == Some(Panel::Record)
+            || self.panel == Some(Panel::Sources) && self.items() == 1;
         self.panel_scroll = 0;
     }
 
@@ -764,12 +825,19 @@ impl Workspace {
         } else {
             None
         };
+        let agent = self
+            .detail
+            .as_ref()
+            .filter(|_| input == Input::FollowUp)
+            .and_then(|d| d.question.as_ref())
+            .map(|q| q.agent.clone())
+            .unwrap_or_else(|| self.agent.clone());
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = if input == Input::Workflow {
                 src.start(workflow.as_deref().unwrap_or(""), &text)
             } else {
-                src.question(parent.as_deref(), &text)
+                src.question_with_agent(parent.as_deref(), &text, &agent)
             };
             let _ = tx.send(result);
         });
@@ -778,6 +846,17 @@ impl Workspace {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if let Some(picker) = &mut self.agent_picker {
+            if picker.editing_model {
+                for c in text.chars().filter(|c| !c.is_control()) {
+                    if picker.model.len() + c.len_utf8() > 200 {
+                        break;
+                    }
+                    picker.model.push(c);
+                }
+            }
+            return;
+        }
         if self.input.is_some() && self.pending.is_none() {
             let clean: String = text
                 .chars()
@@ -823,11 +902,32 @@ impl Workspace {
             }
             return;
         }
+        if let Some(picker) = &mut self.agent_picker {
+            if key.code == KeyCode::Esc {
+                self.agent_picker = None;
+            } else if let Some(selection) = picker.on_key(key) {
+                self.agent = selection;
+                self.agent_picker = None;
+            }
+            return;
+        }
+        if key.code == KeyCode::F(3) {
+            if self.detail.is_none() && self.input != Some(Input::Workflow) {
+                self.agent_picker = Some(workbench::AgentPicker::new(
+                    self.agent.clone(),
+                    self.source.as_ref().map(|s| s.agents()).unwrap_or_default(),
+                ));
+            } else {
+                self.status = Some("This task keeps its recorded runtime. Press n for a new question, then F3 to choose its agent.".into());
+            }
+            return;
+        }
         self.sync_clarification();
         if self.input.is_some() {
             match key.code {
                 KeyCode::Esc => {
                     self.keep_clarification_text();
+                    self.keep_follow_up();
                     self.input = None;
                     self.list_focus = self.detail.is_none();
                     if self.focused && self.detail.is_none() {
@@ -974,6 +1074,55 @@ impl Workspace {
         }
         let question = self.detail.as_ref().is_some_and(|d| d.question.is_some());
         match key.code {
+            KeyCode::Char('h') => self.toggle_panel(Panel::Record),
+            KeyCode::Char('b')
+                if question
+                    && matches!(self.panel, None | Some(Panel::Sources))
+                    && self
+                        .detail
+                        .as_ref()
+                        .is_some_and(|d| d.summary.state != State::Working) =>
+            {
+                let selection = if self.panel == Some(Panel::Sources) {
+                    self.current_answer()
+                        .and_then(|a| self.source_index().and_then(|i| a.sources.get(i)))
+                        .map(|s| {
+                            format!(
+                                "Source: {}\nURL: {}\nSupporting claim (agent supplied): {}",
+                                s.title, s.url, s.supports
+                            )
+                        })
+                } else {
+                    self.result_view().map(|v| v.detail(self.result_row))
+                };
+                if let Some(selection) = selection {
+                    let answer_turn = self
+                        .answer_turn()
+                        .and_then(|answer| {
+                            self.detail
+                                .as_ref()?
+                                .question
+                                .as_ref()?
+                                .turns
+                                .iter()
+                                .position(|turn| std::ptr::eq(turn, answer))
+                        })
+                        .unwrap_or(self.turn);
+                    self.compose(Input::FollowUp);
+                    if !self.text.is_empty() {
+                        self.text.push_str("\n\n");
+                    }
+                    self.text.push_str(&format!(
+                        "About this selection from answer {}:\n{}\n\nMy question: ",
+                        answer_turn + 1,
+                        clean(&selection)
+                    ));
+                    self.cursor = self.text.len();
+                } else {
+                    self.status =
+                        Some("Select a fact, table row, chart point, or source first.".into());
+                }
+            }
             KeyCode::Char('p')
                 if !question
                     && self.panel.is_none()
@@ -1117,7 +1266,7 @@ impl Workspace {
                 self.expanded = false;
                 self.panel_scroll = 0;
             }
-            KeyCode::Enter if self.panel.is_some() => {
+            KeyCode::Enter if self.panel.is_some() && self.panel != Some(Panel::Record) => {
                 self.expanded = !self.expanded;
                 if self.panel == Some(Panel::Evidence) {
                     self.evidence_snapshot = if self.expanded {
@@ -1230,6 +1379,7 @@ pub(crate) fn text_block(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>, s
 
 pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
     let area = f.area();
+    f.render_widget(Block::default().style(t.text().bg(t.background)), area);
     let [header, body, status, footer] = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
@@ -1237,8 +1387,13 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
         Constraint::Length(1),
     ])
     .areas(area);
+    let [brand, runtime] = Layout::horizontal([
+        Constraint::Min(20),
+        Constraint::Length(if area.width >= 100 { 38 } else { 0 }),
+    ])
+    .areas(header);
     let title = if app.demo {
-        " CONDUCTOR  /  demo · illustrative data"
+        " CONDUCTOR / demo · illustrative data"
     } else {
         " CONDUCTOR"
     };
@@ -1246,10 +1401,12 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
         Paragraph::new(Line::from(vec![
             Span::styled(title, t.bold()),
             Span::styled(
-                if app.focused {
-                    "    ^K actions    Tab tasks"
+                if area.width >= 110 {
+                    "   n new   w workflow   ^K actions   Tab tasks"
+                } else if !app.demo {
+                    "   n new   ^K actions   Tab tasks"
                 } else {
-                    "    n new question    w workflow    ^K actions    Tab tasks"
+                    ""
                 },
                 t.dim(),
             ),
@@ -1259,9 +1416,30 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
                 .borders(Borders::BOTTOM)
                 .border_style(t.fg(t.line)),
         ),
-        header,
+        brand,
     );
-    if app.panel == Some(Panel::Capabilities) {
+    f.render_widget(
+        Paragraph::new(clean(&workbench::agent_label(app)))
+            .alignment(ratatui::layout::Alignment::Right)
+            .style(t.dim())
+            .block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(t.fg(t.line)),
+            ),
+        runtime,
+    );
+    if let Some(picker) = &app.agent_picker {
+        workbench::draw_picker(
+            f,
+            body.inner(ratatui::layout::Margin {
+                horizontal: 2,
+                vertical: 1,
+            }),
+            picker,
+            t,
+        );
+    } else if app.panel == Some(Panel::Capabilities) {
         draw_panel(
             f,
             body.inner(ratatui::layout::Margin {
@@ -1307,7 +1485,9 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
             status,
         );
     }
-    let keys = if app.pending.is_some() {
+    let keys = if app.agent_picker.is_some() {
+        " ↑↓ agent   Tab model/mode   Enter select   Esc cancel"
+    } else if app.pending.is_some() {
         " Starting…  Ctrl+C quit (work continues)"
     } else if app.panel == Some(Panel::Capabilities) {
         " ↑↓ select   Enter run   r reload capabilities   Esc back"
@@ -1317,7 +1497,7 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
     ) {
         " Enter save/send   Alt+Enter newline   Esc back (keeps draft)"
     } else if app.input.is_some() {
-        " Enter send   Alt+Enter newline   Esc back   F2 question/workflow"
+        " Enter send   Alt+Enter newline   Esc back   F2 workflow   F3 agent/model"
     } else if app.list_focus {
         " ↑↓ select   Enter open   n question   w workflow   q quit"
     } else if app.panel.is_some() {
@@ -1409,8 +1589,9 @@ fn draw_compose(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             "Ask a question. Follow up in the same task.",
             t.text(),
         ));
-        lines.push(line("Web sources · No project files supplied", t.dim()));
-        lines.push(line("For example: What is the weather in LA?", t.dim()));
+        lines.push(line(app.agent.label(), t.fg(t.accent)));
+        lines.push(line(app.agent.kind.scope(), t.dim()));
+        lines.push(line("F3 choose agent / model", t.dim()));
     }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), intro);
     draw_input(f, input, app, t, " Your request ");
@@ -1556,12 +1737,19 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         .current_turn()
         .map(|q| q.state)
         .unwrap_or(d.summary.state);
-    let action_height = if area.height >= 18 && (question || app.input.is_some()) {
+    let action_height =
+        if area.height >= 18 && (question || app.input.is_some() || d.waiting.is_some()) {
+            5
+        } else {
+            2
+        };
+    let header_height = if area.height >= 18 {
         5
+    } else if area.height >= 12 {
+        3
     } else {
         2
     };
-    let header_height = if area.height >= 12 { 3 } else { 2 };
     let available = area
         .height
         .saturating_sub(header_height + action_height + 1);
@@ -1633,12 +1821,12 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             + if document_view { 2 } else { 0 }
     };
     let content_height = desired.saturating_add(context_height).min(available);
-    let [header, body, gap, action, _] = Layout::vertical([
+    let [header, body, _, gap, action] = Layout::vertical([
         Constraint::Length(header_height),
         Constraint::Length(content_height),
+        Constraint::Min(0),
         Constraint::Length(1),
         Constraint::Length(action_height),
-        Constraint::Min(0),
     ])
     .areas(area);
     let title = app
@@ -1646,8 +1834,9 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         .filter(|turn| turn.input_response.is_none())
         .map(|q| q.question.as_str())
         .unwrap_or(&d.summary.title);
-    let [request, status] = Layout::vertical([
-        Constraint::Length(header_height.saturating_sub(2).max(1)),
+    let [request, status, toolbar] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Min(0),
     ])
     .areas(header);
@@ -1670,6 +1859,20 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         .wrap(Wrap { trim: false }),
         status,
     );
+    if toolbar.height >= 2 {
+        let mut tools = if question {
+            "s Sources   a Activity   h Source record".to_owned()
+        } else {
+            "e Evidence   a Activity   h Receipt".to_owned()
+        };
+        if app.agent_available {
+            tools.push_str("   g Open agent");
+        }
+        f.render_widget(
+            Paragraph::new(vec![Line::raw(""), line(tools, t.fg(t.accent))]),
+            toolbar,
+        );
+    }
     let [notice, result] =
         Layout::vertical([Constraint::Length(context_height), Constraint::Min(0)]).areas(body);
     text_block(f, notice, context, 0);
@@ -1715,14 +1918,38 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         return;
     }
     let evidence = if question { "s Sources" } else { "e Evidence" };
-    let mut commands = format!("{evidence}   a Activity");
+    let mut commands = format!(
+        "{evidence}   a Activity   h {}",
+        if question { "Source record" } else { "Receipt" }
+    );
     if app.agent_available {
         commands.push_str("   g Open agent");
     }
     if has_changes {
         commands.push_str("   p Changes / checks");
     }
-    let mut actions = vec![line(commands, t.fg(t.accent))];
+    let mut actions = vec![line(
+        if header_height >= 5 {
+            if has_changes {
+                "p Changes / checks   ← → file   Enter inspect".into()
+            } else if question {
+                format!(
+                    "{}   {}",
+                    workbench::agent_label(app),
+                    if app.current_answer().is_some() {
+                        "b Ask about selection"
+                    } else {
+                        ""
+                    }
+                )
+            } else {
+                commands.clone()
+            }
+        } else {
+            commands
+        },
+        t.dim(),
+    )];
     if question {
         actions.push(line(
             if d.summary.state == State::Working {
@@ -1760,13 +1987,30 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     }
     let [keys, input] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(action);
     f.render_widget(Paragraph::new(actions), keys);
+    if !question && d.waiting.is_some() && input.height >= 2 {
+        f.render_widget(
+            Paragraph::new(if let Some(receipt) = &d.receipt {
+                if receipt.not_checked.is_empty() {
+                    "Review applies to the recorded checks only.".into()
+                } else {
+                    format!("Not checked: {}", clean(&receipt.not_checked.join(" · ")))
+                }
+            } else {
+                "Final receipt pending · e inspect recorded checks before deciding".into()
+            })
+            .style(t.dim())
+            .wrap(Wrap { trim: false }),
+            input,
+        );
+    }
     if question && d.summary.state != State::Working && input.height >= 2 {
         f.render_widget(
             Paragraph::new(" f  Ask about this answer…")
                 .style(t.dim())
                 .block(
                     Block::default()
-                        .borders(Borders::LEFT | Borders::BOTTOM)
+                        .borders(Borders::ALL)
+                        .style(t.text().bg(t.surface))
                         .border_style(t.fg(t.line)),
                 ),
             input,
@@ -1820,7 +2064,8 @@ fn task_text(app: &Workspace, t: &Theme, width: u16) -> Vec<Line<'static>> {
         {
             let (title, summary) = match p {
                 Presentation::Facts { title, summary, .. }
-                | Presentation::Table { title, summary, .. } => (title, summary),
+                | Presentation::Table { title, summary, .. }
+                | Presentation::Series { title, summary, .. } => (title, summary),
             };
             lines.extend(document::lines(
                 &format!("## {title}\n\n{summary}"),
@@ -1913,6 +2158,17 @@ fn draw_change(f: &mut Frame, area: Rect, app: &Workspace, checks: Option<&View>
         (None, Some(content))
     };
     if let Some(area) = patch {
+        let block = Block::default()
+            .title(if app.change_focus {
+                " Change · selected "
+            } else {
+                " Change "
+            })
+            .title_style(t.dim())
+            .borders(Borders::ALL)
+            .border_style(t.fg(if app.change_focus { t.accent } else { t.line }));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
         let lines = change
             .patch
             .lines()
@@ -1920,9 +2176,9 @@ fn draw_change(f: &mut Frame, area: Rect, app: &Workspace, checks: Option<&View>
                 line(
                     s,
                     if s.starts_with('+') && !s.starts_with("+++") {
-                        t.fg(t.pass)
+                        t.fg(t.pass).bg(t.pass_bg)
                     } else if s.starts_with('-') && !s.starts_with("---") {
-                        t.fg(t.fail)
+                        t.fg(t.fail).bg(t.fail_bg)
                     } else if s.starts_with("@@") {
                         t.fg(t.accent)
                     } else {
@@ -1931,9 +2187,21 @@ fn draw_change(f: &mut Frame, area: Rect, app: &Workspace, checks: Option<&View>
                 )
             })
             .collect();
-        text_block(f, area, lines, app.scroll);
+        text_block(f, inner, lines, app.scroll);
     }
     if let Some(area) = report {
+        let block = Block::default()
+            .title(if !app.change_focus {
+                " Checks · selected "
+            } else {
+                " Checks "
+            })
+            .title_style(t.dim())
+            .borders(Borders::ALL)
+            .border_style(t.fg(if !app.change_focus { t.accent } else { t.line }));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let area = inner;
         if let Some(view) = checks {
             result_view::draw_checks(f, area, view, app.result_row, t);
         } else {
@@ -1972,7 +2240,12 @@ fn captured_text(text: &str, t: &Theme, width: u16) -> Vec<Line<'static>> {
 
 fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     let Some(panel) = app.panel else { return };
+    if panel == Panel::Record {
+        workbench::draw_record(f, area, app, t);
+        return;
+    }
     let title = match panel {
+        Panel::Record => " Record ",
         Panel::Capabilities => " Actions · discovered capabilities ",
         Panel::Sources if app.source_filter.is_some() => " Sources · selected row ",
         Panel::Sources => " Sources ",
@@ -2002,6 +2275,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     );
     let mut rows: Vec<(String, String, bool)> = vec![];
     match panel {
+        Panel::Record => {}
         Panel::Capabilities => {
             for item in &app.capabilities {
                 rows.push((
@@ -2080,6 +2354,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         lines.push(Line::raw(""));
         lines.push(line(
             match panel {
+                Panel::Record => "No record selected.",
                 Panel::Capabilities => "No operations available. Questions remain available with n. Register reports with conductor capability add.",
                 Panel::Sources if app.source_filter.is_some() => {
                     "No source attached to this row. s shows all answer sources."
@@ -2175,6 +2450,7 @@ pub fn demo_task() -> TaskDetail {
         },
     ];
     TaskDetail {
+        receipt: None,
         native: None,
         summary,
         context: "Web question · No project files supplied".into(),
@@ -2185,6 +2461,7 @@ pub fn demo_task() -> TaskDetail {
         tests: None,
         changes: vec![],
         question: Some(Question {
+            agent: Default::default(),
             id: "q-demo".into(),
             title: "Weather in Los Angeles".into(),
             pid: None,
@@ -2373,5 +2650,29 @@ pub fn demo_clarification() -> TaskDetail {
         detail: "Illustrative question. No agent was invoked.".into(),
         failed: false,
     }];
+    d
+}
+
+/// A generic numeric series: the renderer has no weather-specific logic.
+pub fn demo_series() -> TaskDetail {
+    let mut d = demo_task();
+    d.summary.id = "q-series".into();
+    d.summary.title = "When should I run in LA tomorrow?".into();
+    let q = d.question.as_mut().unwrap();
+    q.id = d.summary.id.clone();
+    q.title = d.summary.title.clone();
+    let turn = &mut q.turns[0];
+    turn.question = q.title.clone();
+    let mut answer = turn.answer.take().unwrap();
+    answer.sources[0].title = "Example hourly forecast".into();
+    answer.sources[0].url = "https://example.com/forecast".into();
+    answer.sources[0].supports = "Illustrative forecast values for the displayed periods.".into();
+    answer.sources[0].observed_at = Some("Fixture forecast for 27 Sep 2026".into());
+    answer.sources[0].captured = Some("Illustrative forecast: 06:00 17°C; 09:00 21°C; 12:00 27°C; 15:00 29°C; 18:00 24°C. No live request was made.".into());
+    turn.answer = Some(Answer { text: "## Morning is the cooler window\n\nIllustrative forecast for Los Angeles; not live weather.\n\n06:00: 17°C; 09:00: 21°C; 12:00: 27°C; 15:00: 29°C; 18:00: 24°C. [1]".into(), ..answer }.with_presentation(Presentation::Series {
+        title: "Morning is the cooler window".into(),
+        summary: "Los Angeles · tomorrow · illustrative forecast, not current weather. Select a period to inspect the values and source.".into(), unit: "°C".into(),
+        points: [("06:00",17.,"Cooler start · light wind"),("09:00",21.,"Mild · sun rising"),("12:00",27.,"Warm · exposed routes feel hotter"),("15:00",29.,"Warmest sample period"),("18:00",24.,"Cooling into the evening")].into_iter().map(|(label,value,detail)| conductor_model::task::SeriesPoint { label: label.into(), value, detail: detail.into(), sources: vec![1] }).collect(),
+    }));
     d
 }

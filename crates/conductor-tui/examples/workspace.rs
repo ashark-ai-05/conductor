@@ -18,6 +18,9 @@ fn main() {
     if args.iter().any(|s| s == "forecast") {
         app.open("q-forecast");
     }
+    if args.iter().any(|s| s == "series") {
+        app.open("q-series");
+    }
     if args.iter().any(|s| s == "tests") {
         app.open("test-demo");
     }
@@ -53,10 +56,49 @@ fn main() {
         app.demo = false;
     }
     app.focused = args.iter().any(|s| s == "focused");
+    if args.iter().any(|s| s == "receipt") {
+        app.toggle_panel(Panel::Record);
+    }
+    if args.iter().any(|s| s == "picker") {
+        app.detail = None;
+        app.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(3),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
     app.expanded = args.iter().any(|s| s == "expanded");
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    if args.iter().any(|a| a == "--bench") {
+        let mut timings = Vec::new();
+        for i in 0..120 {
+            app.result_row = i % 3;
+            let started = std::time::Instant::now();
+            terminal
+                .draw(|f| workspace::draw(f, &app, &Theme::DARK))
+                .unwrap();
+            if i >= 20 {
+                timings.push(started.elapsed().as_micros());
+            }
+        }
+        timings.sort_unstable();
+        println!(
+            "{}",
+            serde_json::json!({"backend":"Ratatui TestBackend", "width":width,"height":height,"samples":timings.len(),"p50_us":timings[49],"p95_us":timings[94],"max_us":timings[99],"scope":"render only; excludes terminal I/O, saved-task loading and agent latency"})
+        );
+        return;
+    }
     terminal
-        .draw(|f| workspace::draw(f, &app, &Theme::DARK))
+        .draw(|f| {
+            workspace::draw(
+                f,
+                &app,
+                &if args.iter().any(|s| s == "light") {
+                    Theme::LIGHT
+                } else {
+                    Theme::DARK
+                },
+            )
+        })
         .unwrap();
     let b = terminal.backend().buffer();
     if args.iter().any(|a| a == "--json") {

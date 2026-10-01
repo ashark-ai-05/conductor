@@ -2,6 +2,7 @@
 //! Each follow-up owns its answer and evidence; earlier turns remain readable.
 use crate::{executor, store};
 use conductor_checks::runner::{self, Ended};
+use conductor_model::agent::{AgentKind, AgentSelection};
 use conductor_model::interaction::InputResponse;
 use conductor_model::task::{Activity, Answer, Question, State, Turn};
 use conductor_model::workflow::{Agent, PermissionMode};
@@ -70,11 +71,30 @@ pub fn launch(
     parent: Option<&str>,
     input: &str,
 ) -> Result<String, String> {
-    launch_inner(repo, bin, parent, input, None)
+    launch_inner(repo, bin, parent, input, None, None)
+}
+
+/// Start with an explicit runtime. Existing tasks retain the stored selection.
+pub fn launch_with_agent(
+    repo: &Path,
+    bin: &Path,
+    parent: Option<&str>,
+    input: &str,
+    agent: &AgentSelection,
+) -> Result<String, String> {
+    agent.validate().map_err(str::to_owned)?;
+    launch_inner(repo, bin, parent, input, None, Some(agent))
 }
 
 pub fn respond(repo: &Path, bin: &Path, response: &InputResponse) -> Result<String, String> {
-    launch_inner(repo, bin, Some(&response.binding.task), "", Some(response))
+    launch_inner(
+        repo,
+        bin,
+        Some(&response.binding.task),
+        "",
+        Some(response),
+        None,
+    )
 }
 
 fn launch_inner(
@@ -83,6 +103,7 @@ fn launch_inner(
     parent: Option<&str>,
     input: &str,
     response: Option<&InputResponse>,
+    agent: Option<&AgentSelection>,
 ) -> Result<String, String> {
     let input = input.trim();
     if input.is_empty() && response.is_none() {
@@ -124,6 +145,7 @@ fn launch_inner(
         let mut q = match parent {
             Some(_) => read(repo, &id).ok_or_else(|| io::Error::other("Question not found."))?,
             None => Question {
+                agent: agent.cloned().unwrap_or_default(),
                 id: id.clone(),
                 title: input
                     .lines()
@@ -136,6 +158,12 @@ fn launch_inner(
                 pid: None,
             },
         };
+        q.agent.validate().map_err(io::Error::other)?;
+        if agent.is_some_and(|requested| requested != &q.agent) {
+            return Err(io::Error::other(
+                "This task is bound to its original agent and model. Start a new question to change them.",
+            ));
+        }
         if q.turns.last().is_some_and(|t| t.state == State::Working) {
             return Err(io::Error::other("This question is already working."));
         }
@@ -249,14 +277,28 @@ fn prompt(q: &Question) -> String {
         Reuse meanings and preferences already established in this task. Ask only when missing information materially changes the answer. Do not mark a completed answer needs_input just because a follow-up would be useful.\n\
         For a needed clarification, set needs_input true and input_request to {{kind:single_choice, question, explanation, options:[{{id,label,description}}]}}. Supply 2-8 distinct relevant options with stable short ASCII ids. Conductor always adds a custom answer and optional context; do not add an Other option yourself.\n\
         Set input_request null for ordinary answers or questions that require free text. A clarification is a request for information, never permission to execute a tool or an operation. Keep text a readable fallback containing the question and options.\n\
-        Optionally add presentation: null, or a facts/table object. Keep text a complete standalone answer.\n\
-        Use facts for a handful of values (weather), table for comparisons or forecasts. Use null for prose or clarification.\n\
+        Optionally add presentation: null, or a facts/table/series object. Keep text a complete standalone answer.\n\
+        Use facts for a handful of values (weather), table for comparisons or forecasts. Use series for ordered numeric observations with a unit and source references for each point. Do not extract a chart from prose unless you have the actual values. Use null for prose or clarification.\n\
         Presentation title and summary must retain context, observation times, uncertainty and caveats. Use plain single-line strings.\n\
         Each fact/row has sources: an array of 1-based citation numbers; use [] when no citation supports it.\n\
         Never claim a display is independently verified or add executable actions.\n\
         Prior conversation follows as JSON data; the last question is the current request:\n",
         store::now()
     );
+    if q.agent.kind != AgentKind::Claude {
+        // This restriction follows the actual adapter capability, not an intent classifier.
+        out = out.replace("Use web tools for current information. Never invent current conditions or timestamps.",
+            "You have NO tools or live sources in this session. Do not claim to browse or retrieve current information. Explain when the request requires live information you cannot obtain. Never invent weather, current conditions, URLs, timestamps, or captures.");
+        out = out.replace(
+            "Prior conversation follows as JSON data; the last question is the current request:\n",
+            "",
+        );
+        out.push_str(
+            "Return JSON matching this schema when possible; never surround it with commentary:\n",
+        );
+        out.push_str(&schema());
+        out.push_str("\nPrior conversation follows as JSON data; the last question is the current request:\n");
+    }
     let history: Vec<_> = q
         .turns
         .iter()
@@ -288,6 +330,14 @@ fn schema() -> String {
         json!({"kind":{"type":"string","const":"table"},"title":string,"summary":string,"columns":{"type":"array","items":string,"minItems":2,"maxItems":8},"rows":{"type":"array","items":row,"minItems":1,"maxItems":200}}),
         vec!["kind", "title", "summary", "columns", "rows"],
     );
+    let point = object(
+        json!({"label":string,"value":{"type":"number","minimum":-1e12,"maximum":1e12},"detail":string,"sources":refs}),
+        vec!["label", "value", "detail", "sources"],
+    );
+    let series = object(
+        json!({"kind":{"type":"string","const":"series"},"title":string,"summary":string,"unit":string,"points":{"type":"array","items":point,"minItems":2,"maxItems":200}}),
+        vec!["kind", "title", "summary", "unit", "points"],
+    );
     let choice = object(
         json!({"id":string,"label":string,"description":string}),
         vec!["id", "label", "description"],
@@ -299,7 +349,7 @@ fn schema() -> String {
     object(json!({
         "input_request":{"anyOf":[{"type":"null"},request]},
         "text":string,"needs_input":{"type":"boolean"},
-        "presentation":{"anyOf":[{"type":"null"},facts,table]},
+        "presentation":{"anyOf":[{"type":"null"},facts,table,series]},
         "sources":{"type":"array","items":object(json!({"title":string,"url":string,"supports":string,"observed_at":{"type":["string","null"]}}), vec!["title","url","supports","observed_at"])}
     }), vec!["text","needs_input","sources","presentation","input_request"]).to_string()
 }
@@ -353,7 +403,7 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
         agent: Agent {
             kind: "claude".into(),
             command: vec![],
-            model: None,
+            model: q.agent.model.clone(),
             permission_mode: PermissionMode::AcceptEdits,
             allowed_tools: vec!["WebSearch".into(), "WebFetch".into()],
             who: None,
@@ -380,8 +430,18 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
         "--json-schema".into(),
         schema(),
     ]);
+    if q.agent.kind == AgentKind::Pi {
+        argv = crate::question_agent::pi_argv(&q.agent, brief.prompt.clone());
+    }
+    if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+        argv = crate::question_cli::argv(&q.agent, brief.prompt.clone(), &scratch)?;
+    }
+    let environment = crate::question_cli::environment(q.agent.kind);
+    let mut cli = crate::question_cli::Stream::default();
+    let tool_violation = std::cell::Cell::new(false);
     let cancel_path = dir.join(format!("cancel-{}", q.turns.len()));
     let mut capture = Capture::default();
+    let mut pi = crate::question_agent::PiStream::default();
     let mut write_error = None;
     let execution = runner::run_cancellable(
         &runner::Spec {
@@ -391,26 +451,81 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
             pass_env: &[],
             run_id: id,
             inherit_env: true,
-            set_env: &[],
+            set_env: &environment,
         },
         &mut |line| {
-            if capture.feed(line, q.turns.last_mut().unwrap())
-                && let Err(e) = save(dir, &q)
-            {
+            let changed = if q.agent.kind == AgentKind::Pi {
+                let changed = pi.feed(line);
+                if changed {
+                    q.turns.last_mut().unwrap().activity.push(Activity {
+                        at: store::now(),
+                        actor: "Pi".into(),
+                        title: "Response received".into(),
+                        detail: format!(
+                            "Model: {}\nNo tools enabled. No live sources captured.",
+                            pi.model.as_deref().unwrap_or("Unavailable")
+                        ),
+                        failed: pi.error.is_some(),
+                    });
+                }
+                changed
+            } else if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+                let update = cli.feed(q.agent.kind, line);
+                tool_violation.set(cli.violation);
+                if let Some(update) = update {
+                    q.turns.last_mut().unwrap().activity.push(Activity {
+                        at: store::now(),
+                        actor: q.agent.kind.label().into(),
+                        title: update.title.into(),
+                        detail: update.detail,
+                        failed: update.failed,
+                    });
+                    true
+                } else {
+                    false
+                }
+            } else {
+                capture.feed(line, q.turns.last_mut().unwrap())
+            };
+            if changed && let Err(e) = save(dir, &q) {
                 write_error = Some(e);
             }
         },
-        &mut || cancel_path.exists(),
+        &mut || cancel_path.exists() || tool_violation.get(),
     );
-    let _ = fs::remove_dir(&scratch);
+    let _ = fs::remove_dir_all(&scratch);
     if let Some(e) = write_error {
         return Err(e);
     }
-    let agent = executor::parse_claude_stream(&execution.stdout_text());
+    let (answer, finished, reason, tokens, cost) = if q.agent.kind == AgentKind::Pi {
+        (
+            parse_answer(&pi.text),
+            pi.finished && pi.error.is_none(),
+            pi.error,
+            pi.tokens,
+            pi.cost_usd,
+        )
+    } else if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+        (
+            parse_answer(&cli.text),
+            cli.finished && cli.error.is_none(),
+            cli.error,
+            cli.tokens,
+            None,
+        )
+    } else {
+        let agent = executor::parse_claude_stream(&execution.stdout_text());
+        (
+            capture.answer.or_else(|| parse_answer(&agent.final_text)),
+            agent.finished,
+            agent.reason,
+            agent.usage.as_ref().map(|u| u.total()),
+            agent.usage.as_ref().and_then(|u| u.cost_usd),
+        )
+    };
     let turn = q.turns.last_mut().unwrap();
-    turn.tokens = agent.usage.as_ref().map(|u| u.total());
-    turn.cost_usd = agent.usage.as_ref().and_then(|u| u.cost_usd);
-    let answer = capture.answer.or_else(|| parse_answer(&agent.final_text));
+    turn.tokens = tokens;
+    turn.cost_usd = cost;
     turn.answer = answer.map(|mut a| {
         if a.input_request().ok().flatten().is_some() {
             a.needs_input = true;
@@ -426,21 +541,15 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
         }
         a
     });
-    turn.state = if execution.ended == Ended::Cancelled {
+    turn.state = if tool_violation.get() {
+        turn.error = reason;
+        State::Stopped
+    } else if execution.ended == Ended::Cancelled {
         State::Cancelled
-    } else if !execution.complete() || execution.exit_code != Some(0) || !agent.finished {
-        turn.error = Some(
-            execution
-                .reason
-                .clone()
-                .or(agent.reason)
-                .unwrap_or_else(|| {
-                    format!(
-                        "The answering process exited with {:?}: {}",
-                        execution.exit_code, execution.stderr_tail
-                    )
-                }),
-        );
+    } else if !execution.complete() || execution.exit_code != Some(0) || !finished {
+        turn.error = Some(execution.reason.clone().or(reason)
+            .or_else(|| (!finished && execution.exit_code == Some(0)).then(|| "The agent stream ended without a completed response. Retry to continue.".into()))
+            .unwrap_or_else(|| format!("The answering process exited with {:?}: {}", execution.exit_code, execution.stderr_tail)));
         State::Stopped
     } else if turn
         .answer
@@ -499,7 +608,7 @@ fn parse_answer(text: &str) -> Option<Answer> {
         .unwrap_or(text.trim())
         .trim();
     serde_json::from_str(text).ok().or_else(|| {
-        (!text.is_empty() && !text.starts_with('{') && !text.starts_with('[')).then(|| Answer {
+        (!text.is_empty()).then(|| Answer {
             text: text.into(),
             ..Answer::default()
         })

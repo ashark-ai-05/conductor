@@ -5,6 +5,7 @@
 //! pure functions that decide things about it, which is what lets a verdict be re-derived
 //! from stored evidence with zero model calls.
 
+pub mod agent;
 pub mod capability;
 pub mod interaction;
 
