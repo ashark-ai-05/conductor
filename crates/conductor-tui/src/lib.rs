@@ -6,6 +6,7 @@ mod document;
 mod result_view;
 pub mod theme;
 pub mod ui;
+mod workbench;
 pub mod workspace;
 
 use app::App;
@@ -53,18 +54,30 @@ pub fn run_workspace(mut app: workspace::Workspace, theme: Theme) -> io::Result<
     let result = (|| {
         execute!(io::stdout(), EnableBracketedPaste)?;
         let mut last_tick = Instant::now();
+        let mut dirty = true;
         while !app.quit {
-            terminal.draw(|f| workspace::draw(f, &app, &theme))?;
+            if dirty {
+                terminal.draw(|f| workspace::draw(f, &app, &theme))?;
+                dirty = false;
+            }
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
-                    Event::Paste(text) => app.paste(&text),
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        app.on_key(key);
+                        dirty = true;
+                    }
+                    Event::Paste(text) => {
+                        app.paste(&text);
+                        dirty = true;
+                    }
+                    Event::Resize(_, _) => dirty = true,
                     _ => {}
                 }
             }
             if last_tick.elapsed() >= Duration::from_millis(500) {
                 app.tick();
                 last_tick = Instant::now();
+                dirty |= !app.demo;
             }
         }
         Ok(())

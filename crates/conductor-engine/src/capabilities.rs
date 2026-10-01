@@ -537,6 +537,7 @@ pub fn detail(repo: &Path, record: &Record) -> Result<TaskDetail, String> {
         })
         .collect();
     Ok(TaskDetail {
+        receipt: None,
         summary: TaskSummary {
             id: record.id.clone(),
             title: record.descriptor.label.clone(),

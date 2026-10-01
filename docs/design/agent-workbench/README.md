@@ -1,6 +1,7 @@
 # Agent workbench design
 
-**Status: proposal, 2026-10-01. Implementation awaits explicit confirmation.**
+**Status: design proposal, 2026-10-01. A first implementation was subsequently approved.**
+See [implementation status and limits](../../agent-workbench.md); the mockup still includes future behavior.
 This directory records a product direction and an interactive design study. It
 does not add agent adapters, change Conductor's runtime, or supersede the current
 scope in `CLAUDE.md`. All screenshots show a browser mockup with illustrative data,

@@ -57,9 +57,15 @@ pub struct Answer {
     pub presentation: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Presentation {
+    Series {
+        title: String,
+        summary: String,
+        unit: String,
+        points: Vec<SeriesPoint>,
+    },
     Facts {
         title: String,
         summary: String,
@@ -71,6 +77,15 @@ pub enum Presentation {
         columns: Vec<String>,
         rows: Vec<ResultRow>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesPoint {
+    pub label: String,
+    pub value: f64,
+    pub detail: String,
+    pub sources: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +121,24 @@ impl Answer {
         let refs =
             |r: &[usize]| r.len() <= 20 && r.iter().all(|n| *n > 0 && *n <= self.sources.len());
         let valid = match &view {
+            Presentation::Series {
+                title,
+                summary,
+                unit,
+                points,
+            } => {
+                text(title, 160)
+                    && text(summary, 1200)
+                    && text(unit, 40)
+                    && (2..=200).contains(&points.len())
+                    && points.iter().all(|p| {
+                        text(&p.label, 80)
+                            && text(&p.detail, 1200)
+                            && refs(&p.sources)
+                            && p.value.is_finite()
+                            && p.value.abs() <= 1e12
+                    })
+            }
             Presentation::Facts {
                 title,
                 summary,
@@ -188,6 +221,9 @@ pub struct Turn {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Question {
+    /// Fixed for this task; follow-ups cannot silently switch runtimes.
+    #[serde(default)]
+    pub agent: crate::agent::AgentSelection,
     pub id: String,
     pub title: String,
     pub turns: Vec<Turn>,
@@ -213,6 +249,7 @@ pub struct TaskChange {
 
 #[derive(Debug, Clone)]
 pub struct TaskDetail {
+    pub receipt: Option<crate::Receipt>,
     pub native: Option<crate::capability::NativeView>,
     pub summary: TaskSummary,
     pub context: String,
@@ -290,5 +327,32 @@ mod tests {
             json!({"kind":"facts","title":"Weather","summary":"Demo","facts":[{"label":"Temperature","value":"\u{1b}[31m24","sources":[]}]}),
         );
         assert!(answer.presentation().is_err());
+    }
+}
+
+#[cfg(test)]
+mod series_tests {
+    use super::*;
+    #[test]
+    fn series_cannot_smuggle_invalid_values_references_or_actions() {
+        let valid = serde_json::json!({"kind":"series","title":"Load","summary":"Captured samples","unit":"ms","points":[{"label":"one","value":1.5,"detail":"first","sources":[]},{"label":"two","value":2.0,"detail":"second","sources":[]}]});
+        let mut answer = Answer {
+            text: "Readable fallback".into(),
+            presentation: Some(valid.clone()),
+            ..Default::default()
+        };
+        assert!(answer.presentation().unwrap().is_some());
+        for change in ["source", "range", "action", "empty"] {
+            let mut value = valid.clone();
+            match change {
+                "source" => value["points"][0]["sources"] = serde_json::json!([1]),
+                "range" => value["points"][0]["value"] = serde_json::json!(1e20),
+                "action" => value["command"] = serde_json::json!("run something"),
+                _ => value["points"] = serde_json::json!([]),
+            }
+            answer.presentation = Some(value);
+            assert!(answer.presentation().is_err());
+            assert_eq!(answer.text, "Readable fallback");
+        }
     }
 }

@@ -19,6 +19,8 @@ pub mod local_panes;
 pub mod metrics;
 pub mod otlp;
 pub mod question;
+pub mod question_agent;
+mod question_cli;
 pub mod receipt;
 pub mod review;
 pub mod store;

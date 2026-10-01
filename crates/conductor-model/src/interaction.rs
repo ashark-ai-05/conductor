@@ -202,6 +202,7 @@ mod tests {
             cost_usd: None,
         };
         let mut q = Question {
+            agent: Default::default(),
             id: "q-test".into(),
             title: "Study".into(),
             turns: vec![turn],

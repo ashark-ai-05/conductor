@@ -488,7 +488,7 @@ fn patches_and_checks_share_an_attempt_and_open_evidence_does_not_change_under_t
 }
 
 #[test]
-fn compact_question_keeps_follow_up_close_and_activity_hides_transport_metadata() {
+fn workbench_anchors_the_composer_and_activity_hides_transport_metadata() {
     let mut app = Workspace::demo();
     app.focused = true;
     let output = render(&app, 140, 60);
@@ -496,7 +496,10 @@ fn compact_question_keeps_follow_up_close_and_activity_hides_transport_metadata(
         .lines()
         .position(|line| line.contains("f Follow up"))
         .unwrap();
-    assert!(follow < 30);
+    assert!(
+        (50..59).contains(&follow),
+        "composer should stay near the bottom"
+    );
     assert!(!output.contains("Fact             Value"));
     press(&mut app, KeyCode::Char('a'));
     let output = render(&app, 75, 32);
@@ -873,4 +876,194 @@ fn unsupported_requests_keep_prose_and_clarification_renders_in_small_panes() {
     assert!(out.contains("What does FDE mean"));
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.input, Some(Input::FollowUp));
+}
+
+#[test]
+fn agent_picker_preserves_the_request_and_never_changes_an_existing_task() {
+    use conductor_model::agent::AgentKind;
+    let mut app = Workspace::demo();
+    press(&mut app, KeyCode::Char('n'));
+    app.paste("Explain idempotency");
+    press(&mut app, KeyCode::F(3));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Tab);
+    app.paste("openrouter/example-model");
+    assert_eq!(app.text, "Explain idempotency");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.agent.kind, AgentKind::Pi);
+    assert_eq!(app.agent.model.as_deref(), Some("openrouter/example-model"));
+    assert!(app.agent_picker.is_none());
+    assert!(render(&app, 80, 28).contains("No live sources"));
+    app.open("q-demo");
+    press(&mut app, KeyCode::F(3));
+    assert!(app.agent_picker.is_none());
+    assert_eq!(
+        app.detail
+            .as_ref()
+            .unwrap()
+            .question
+            .as_ref()
+            .unwrap()
+            .agent
+            .kind,
+        AgentKind::Claude
+    );
+}
+
+#[test]
+fn follow_up_drafts_and_selected_context_survive_inspection_and_task_switches() {
+    let mut app = Workspace::demo();
+    press(&mut app, KeyCode::Char('f'));
+    app.paste("Keep this draft");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Esc);
+    app.open("q-comparison");
+    app.open("q-demo");
+    press(&mut app, KeyCode::Char('f'));
+    assert_eq!(app.text, "Keep this draft");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('b'));
+    assert!(app.text.contains("Keep this draft"));
+    assert!(app.text.contains("Temperature") && app.text.contains("24°C / 75°F"));
+    assert!(app.text.contains("answer 1"));
+}
+
+#[test]
+fn records_do_not_invent_verification_and_stay_bound_to_the_opened_snapshot() {
+    let mut app = Workspace::demo();
+    press(&mut app, KeyCode::Char('h'));
+    let original = app.record_snapshot.clone();
+    assert!(render(&app, 100, 40).contains("not a hash-chained"));
+    app.detail
+        .as_mut()
+        .unwrap()
+        .question
+        .as_mut()
+        .unwrap()
+        .turns[0]
+        .answer = None;
+    assert_eq!(original, app.record_snapshot);
+    press(&mut app, KeyCode::Esc);
+    app.open("bug-demo");
+    press(&mut app, KeyCode::Char('h'));
+    assert!(render(&app, 80, 24).contains("No completed receipt"));
+    press(&mut app, KeyCode::Esc);
+    let mut receipt = conductor_model::demo::receipt();
+    receipt.not_checked = vec!["Live payment provider was not exercised".into()];
+    app.detail.as_mut().unwrap().receipt = Some(receipt);
+    press(&mut app, KeyCode::Char('h'));
+    assert!(
+        app.record_snapshot
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("Live payment provider was not exercised")
+    );
+    assert!(
+        app.record_snapshot
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("conductor verify")
+    );
+}
+
+#[test]
+fn series_selection_keeps_values_sources_and_full_text_at_multiple_widths() {
+    let mut app = Workspace::demo();
+    app.open("q-series");
+    press(&mut app, KeyCode::Down);
+    for width in [40, 80, 140] {
+        let output = render(&app, width, 36);
+        assert!(
+            output.contains("09:00") && output.contains("21 °C"),
+            "{output}"
+        );
+        assert!(output.contains("illustrative"));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.source_filter, Some(vec![0]));
+    assert!(render(&app, 80, 36).contains("09:00"));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.result_row, 1);
+    press(&mut app, KeyCode::Char('v'));
+    assert!(render(&app, 100, 36).contains("not live weather"));
+    for width in [1, 10, 20] {
+        render(&app, width, 5);
+    }
+}
+
+#[test]
+fn a_follow_up_about_a_previous_answer_names_the_actual_answer_turn() {
+    let mut app = Workspace::demo();
+    let q = app.detail.as_mut().unwrap().question.as_mut().unwrap();
+    let mut retry = q.turns[0].clone();
+    retry.state = State::Stopped;
+    retry.answer = None;
+    q.turns.push(retry);
+    app.detail.as_mut().unwrap().summary.state = State::Stopped;
+    app.turn = 1;
+    press(&mut app, KeyCode::Char('b'));
+    assert!(app.text.contains("from answer 1:"));
+    assert!(!app.text.contains("from answer 2:"));
+}
+
+#[test]
+fn model_input_remains_visible_in_a_narrow_picker() {
+    let mut app = Workspace::demo();
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::F(3));
+    press(&mut app, KeyCode::Tab);
+    app.paste("example/model");
+    assert!(render(&app, 40, 20).contains("example/model"));
+}
+
+#[test]
+fn series_uses_the_selected_palette_instead_of_the_terminal_background() {
+    let mut app = Workspace::demo();
+    app.open("q-series");
+    for theme in [Theme::DARK, Theme::LIGHT] {
+        let mut terminal = Terminal::new(TestBackend::new(100, 36)).unwrap();
+        terminal.draw(|f| workspace::draw(f, &app, &theme)).unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| { cell.bg != ratatui::style::Color::Reset })
+        );
+    }
+}
+
+#[test]
+fn picker_supports_copilot_models_and_amp_modes_at_narrow_widths() {
+    use conductor_model::agent::AgentKind;
+    let mut app = Workspace::demo();
+    press(&mut app, KeyCode::Char('n'));
+    app.paste("Compare retry strategies");
+    press(&mut app, KeyCode::F(3));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Tab);
+    app.paste("example-model");
+    assert!(render(&app, 50, 20).contains("example-model"));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.agent.kind, AgentKind::Copilot);
+    assert_eq!(app.agent.model.as_deref(), Some("example-model"));
+    press(&mut app, KeyCode::F(3));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Tab);
+    app.paste("example-mode");
+    let out = render(&app, 50, 20);
+    assert!(
+        out.contains("Mode (optional)") && out.contains("example-mode"),
+        "{out}"
+    );
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.agent.kind, AgentKind::Amp);
+    assert_eq!(app.agent.mode.as_deref(), Some("example-mode"));
+    assert!(app.agent.model.is_none());
+    assert_eq!(app.text, "Compare retry strategies");
 }

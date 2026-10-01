@@ -101,6 +101,17 @@ Single-choice input, a custom answer, optional context, and bound continuation i
 same direct-question task are approved. See `docs/task-workspace.md`. Approval gates,
 workflow-stage inputs and arbitrary generated controls are outside this slice.
 
+## Agent workbench approval, 2026-10-01
+
+Krunal confirmed implementation after the design package was saved. The first slice
+is documented in `docs/agent-workbench.md`: question agent/model selection (Claude
+and experimental Pi with no tools), a numeric-series widget, workbench layout,
+source/receipt inspection, and retained follow-up drafts. Krunal subsequently requested
+Copilot and Amp, the runtimes used at work: their no-tools question adapters,
+Copilot model selection, and Amp mode selection are included. Existing check and review
+semantics remain unchanged. The design mockup includes later capabilities; do not
+claim all its adapters, handoffs, or replay controls are implemented.
+
 ## Next, in order
 
 The task workspace scope approved by Krunal on 2026-09-26 supersedes the launch-tab

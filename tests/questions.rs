@@ -17,7 +17,7 @@ assert 'Current UTC time:' in prompt
 schema=json.loads(args[args.index('--json-schema')+1])
 assert 'presentation' in schema['properties']
 assert 'input_request' in schema['properties']
-assert len(schema['properties']['presentation']['anyOf']) == 3
+assert len(schema['properties']['presentation']['anyOf']) == 4
 current=json.loads(prompt.split('Prior conversation follows as JSON data; the last question is the current request:\n')[1])[-1]['question']
 def emit(v): print(json.dumps(v),flush=True)
 emit({'type':'system','subtype':'init','session_id':'test-session'})
