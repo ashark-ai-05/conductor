@@ -50,11 +50,13 @@ impl AgentPicker {
                 } else {
                     1
                 };
-                self.selection.kind = choices[(current + step) % choices.len()];
-                self.selection.model = None;
-                self.selection.mode = None;
+                self.selection =
+                    AgentSelection::starting(choices[(current + step) % choices.len()]);
                 self.model.clear();
                 self.error = None;
+            }
+            KeyCode::Char('t') if !self.editing_model && self.selection.kind == AgentKind::Amp => {
+                self.selection.tools = !self.selection.tools;
             }
             KeyCode::Char(c)
                 if self.editing_model
@@ -124,7 +126,22 @@ pub fn draw_picker(f: &mut Frame, area: Rect, picker: &AgentPicker, t: &Theme) {
                 t.text()
             },
         ));
-        lines.push(line(format!("  {}", kind.scope()), t.dim()));
+        let shown = if selected {
+            picker.selection.clone()
+        } else {
+            AgentSelection::starting(kind)
+        };
+        lines.push(line(format!("  {}", shown.scope()), t.dim()));
+        if selected && kind == AgentKind::Amp {
+            lines.push(line(
+                if shown.tools {
+                    "  Tools on · t switches them off"
+                } else {
+                    "  Tools off · t switches them on"
+                },
+                t.fg(if shown.tools { t.pass } else { t.warn }),
+            ));
+        }
         if let Some(why) = picker
             .choices
             .iter()
@@ -172,7 +189,7 @@ pub fn draw_picker(f: &mut Frame, area: Rect, picker: &AgentPicker, t: &Theme) {
     ));
     lines.push(Line::raw(""));
     lines.push(line(
-        "↑↓ agent   Tab model/mode   Enter use selection   Esc cancel",
+        "↑↓ agent   Tab model/mode   t Amp tools   Enter use selection   Esc cancel",
         t.text(),
     ));
     if let Some(error) = &picker.error {
