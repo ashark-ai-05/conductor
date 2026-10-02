@@ -2,6 +2,8 @@
 
 pub mod app;
 mod clarification;
+mod content;
+mod diagram;
 mod document;
 mod result_view;
 pub mod theme;

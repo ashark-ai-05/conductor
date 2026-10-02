@@ -1169,7 +1169,98 @@ fn an_agent_without_tools_says_nothing_was_looked_up() {
     let q = app.detail.as_mut().unwrap().question.as_mut().unwrap();
     q.agent.kind = conductor_model::agent::AgentKind::Copilot;
     q.turns[0].answer.as_mut().unwrap().sources.clear();
+    // Nothing was cited, so the pane rests on the steps; Sources says why it is empty.
+    assert!(render(&app, 140, 40).contains("Answer returned"));
+    press(&mut app, KeyCode::Char('s'));
     let text = render(&app, 140, 40);
     assert!(text.contains("Sources 0"));
     assert!(text.contains("answered without tools"));
+}
+
+#[test]
+fn the_text_decides_the_widget_when_the_agent_names_none() {
+    let mut app = Workspace::demo();
+    app.open("q-document");
+    let text = render(&app, 150, 70);
+    assert!(text.contains("Formula") && text.contains("d₁ = (ln(S/K) + (r_d - r_f + ½σ²)T)/(σ√T)"));
+    assert!(!text.contains("\\frac") && !text.contains("\\sigma"));
+    assert!(text.contains("Diagram") && text.contains("│ Market data │"));
+    assert!(text.contains("╔══════════════╗") && text.contains("▼ call"));
+    assert!(text.contains("python") && text.contains("d2 = d1 - vol * sqrt(T)"));
+    // The original stays one key away.
+    press(&mut app, KeyCode::Char('v'));
+    assert!(render(&app, 150, 70).contains("\\frac{\\ln(S/K)"));
+
+    let mut table = Workspace::demo();
+    let answer = table
+        .detail
+        .as_mut()
+        .unwrap()
+        .question
+        .as_mut()
+        .unwrap()
+        .turns[0]
+        .answer
+        .as_mut()
+        .unwrap();
+    answer.presentation = None;
+    answer.text = "## Retries\n\n| Strategy | Wait |\n|---|---|\n| Backoff | Doubles [1] |\n| Fixed | Constant |".into();
+    let text = render(&table, 150, 40);
+    assert!(text.contains("Table") && text.contains("Retries"));
+    assert!(text.contains("Backoff") && !text.contains("|---|"));
+    press(&mut table, KeyCode::Down);
+    assert_eq!(
+        table.result_row, 1,
+        "rows of a detected table can be selected"
+    );
+}
+
+#[test]
+fn a_long_answer_scrolls_to_its_end_and_stops_there() {
+    let mut app = Workspace::demo();
+    app.open("q-document");
+    let top = render(&app, 150, 30);
+    assert!(top.contains("Garman-Kohlhagen") && !top.contains("Put-call parity"));
+    assert!(top.contains('┃'), "a bar shows there is more");
+    for _ in 0..200 {
+        press(&mut app, KeyCode::Down);
+    }
+    let end = render(&app, 150, 30);
+    assert!(end.contains("Put-call parity") && !end.contains("Garman-Kohlhagen"));
+    let rested = app.scroll;
+    assert!(rested < 100, "scrolling stops at the end: {rested}");
+    press(&mut app, KeyCode::Home);
+    assert_eq!(app.scroll, 0);
+    press(&mut app, KeyCode::End);
+    assert_eq!(app.scroll, rested);
+}
+
+#[test]
+fn the_questions_tab_moves_between_answers() {
+    let mut app = Workspace::demo();
+    app.open("q-document");
+    let q = app.detail.as_mut().unwrap().question.as_mut().unwrap();
+    let mut second = q.turns[0].clone();
+    second.question = "and for a put?".into();
+    q.turns.push(second);
+    app.turn = 1;
+    // Nothing is cited, so the pane rests on the questions.
+    let text = render(&app, 150, 40);
+    assert!(text.contains("Questions 2"));
+    assert!(text.contains("1. black scholes formula") && text.contains("2. and for a put?"));
+    press(&mut app, KeyCode::Char('t'));
+    assert_eq!(app.panel, Some(Panel::Turns));
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.turn, 0);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.panel, None);
+    assert_eq!(app.turn, 0);
+}
+
+#[test]
+fn a_very_wide_screen_keeps_the_frame_in_the_middle() {
+    let text = render(&Workspace::demo(), 300, 30);
+    let brand = text.lines().next().unwrap();
+    let start = brand.chars().position(|c| c == 'C').unwrap();
+    assert!((55..=65).contains(&start), "frame starts at {start}");
 }

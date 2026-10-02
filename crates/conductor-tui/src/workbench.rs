@@ -329,5 +329,6 @@ pub fn draw_record(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         Line::raw(""),
     ];
     lines.extend(document::lines(text, area.width, t, &[]));
-    text_block(f, area, lines, app.panel_scroll);
+    let max = text_block(f, area, lines, app.panel_scroll);
+    app.limits.set((app.limits.get().0, max));
 }

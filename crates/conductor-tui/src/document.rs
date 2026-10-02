@@ -119,7 +119,8 @@ struct Renderer<'a> {
     lists: Vec<Option<u64>>,
     prefix: String,
     quote: usize,
-    code: bool,
+    /// The language and text of the fenced block being read.
+    code: Option<(String, String)>,
     table: Option<TableData>,
     citations: &'a [Citation],
     links: Vec<String>,
@@ -146,19 +147,87 @@ impl Renderer<'_> {
             "│ ".repeat(self.quote),
             " ".repeat(self.prefix.width())
         );
-        self.lines.extend(wrap(
+        let marked = !self.prefix.trim().is_empty() || self.quote > 0;
+        let mut rows = wrap(
             &std::mem::take(&mut self.current),
             self.width,
             &first,
             &rest,
-            !self.code,
-        ));
+            true,
+        );
+        // List markers and quote bars carry the accent, so structure shows at a glance.
+        if marked {
+            for row in &mut rows {
+                if let Some(lead) = row.spans.first_mut() {
+                    lead.style = self.t.fg(self.t.accent);
+                }
+            }
+        }
+        self.lines.extend(rows);
         self.prefix = " ".repeat(self.prefix.width());
     }
     fn gap(&mut self) {
         self.flush();
         if self.lines.last().is_some_and(|l| l.width() > 0) {
             self.lines.push(Line::raw(""));
+        }
+    }
+    /// A fenced block, drawn by what it holds: a formula, a diagram, or code. Each sits on
+    /// its own surface with a coloured bar, and keeps its text exactly as written.
+    fn block(&mut self, language: &str, text: &str) {
+        let t = self.t;
+        let indent = " ".repeat(self.prefix.width());
+        let room = (self.width as usize)
+            .saturating_sub(indent.len() + 3)
+            .max(1) as u16;
+        let diagram = (language == "mermaid")
+            .then(|| crate::diagram::mermaid(text, room, t))
+            .flatten();
+        let (bar, label) = match language {
+            "math" => (t.run, "Formula".to_owned()),
+            "mermaid" if diagram.is_some() => (t.accent, "Diagram".to_owned()),
+            "mermaid" => (t.warn, "Diagram · shown as written".to_owned()),
+            "" => (t.pass, "Code".to_owned()),
+            other => (t.pass, other.to_owned()),
+        };
+        let body = if language == "math" {
+            t.bold().bg(t.surface)
+        } else {
+            t.text().bg(t.surface)
+        };
+        let rows: Vec<Line<'static>> = match diagram {
+            Some(rows) => rows,
+            None => text
+                .trim_end_matches('\n')
+                .split('\n')
+                .flat_map(|row| {
+                    wrap(
+                        &[Span::styled(clean(row).replace('\t', "    "), body)],
+                        room,
+                        "",
+                        "",
+                        false,
+                    )
+                })
+                .collect(),
+        };
+        let widest = rows.iter().map(Line::width).max().unwrap_or(0);
+        self.lines.push(Line::from(vec![
+            Span::raw(indent.clone()),
+            Span::styled(label, t.fg(bar)),
+        ]));
+        for row in rows {
+            let pad = widest.saturating_sub(row.width()) + 1;
+            let mut spans = vec![
+                Span::raw(indent.clone()),
+                Span::styled("▌ ", t.fg(bar).bg(t.surface)),
+            ];
+            spans.extend(row.spans.into_iter().map(|mut span| {
+                span.style = span.style.bg(t.surface);
+                span
+            }));
+            spans.push(Span::styled(" ".repeat(pad), Style::new().bg(t.surface)));
+            self.lines.push(Line::from(spans));
         }
     }
     fn link(&mut self, url: &str) {
@@ -274,7 +343,7 @@ pub fn lines(text: &str, width: u16, t: &Theme, citations: &[Citation]) -> Vec<L
         lists: vec![],
         prefix: String::new(),
         quote: 0,
-        code: false,
+        code: None,
         table: None,
         citations,
         links: vec![],
@@ -284,7 +353,9 @@ pub fn lines(text: &str, width: u16, t: &Theme, citations: &[Citation]) -> Vec<L
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_FOOTNOTES;
-    for event in Parser::new_ext(text, options) {
+    // Maths is rewritten first: the Markdown parser would eat its backslashes.
+    let text = crate::content::math(text);
+    for event in Parser::new_ext(&text, options) {
         match event {
             Event::Start(Tag::Paragraph) => {}
             Event::End(TagEnd::Paragraph) => {
@@ -348,33 +419,21 @@ pub fn lines(text: &str, width: u16, t: &Theme, citations: &[Citation]) -> Vec<L
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 r.gap();
-                r.code = true;
-                r.push_style(t.text().bg(t.sel));
                 let language = match kind {
                     CodeBlockKind::Fenced(lang) => lang.to_string(),
                     _ => String::new(),
                 };
-                r.lines.push(Line::styled(
-                    if language.is_empty() {
-                        "Code".into()
-                    } else {
-                        language
-                    },
-                    t.dim(),
-                ));
+                r.code = Some((language, String::new()));
             }
             Event::End(TagEnd::CodeBlock) => {
-                r.flush();
-                r.code = false;
-                r.styles.pop();
+                if let Some((language, text)) = r.code.take() {
+                    r.block(&language, &text);
+                }
                 r.gap();
             }
-            Event::Text(text) if r.code => {
-                for part in text.split_inclusive('\n') {
-                    r.emit(part.trim_end_matches('\n').replace('\t', "    "));
-                    if part.ends_with('\n') {
-                        r.flush();
-                    }
+            Event::Text(text) if r.code.is_some() => {
+                if let Some((_, body)) = &mut r.code {
+                    body.push_str(&text);
                 }
             }
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
@@ -451,6 +510,7 @@ pub fn lines(text: &str, width: u16, t: &Theme, citations: &[Citation]) -> Vec<L
     r.lines
 }
 
+/// Draws a scrolling document in a pane and returns how far it can scroll.
 pub fn draw(
     f: &mut Frame,
     area: Rect,
@@ -459,8 +519,7 @@ pub fn draw(
     title: &str,
     focused: bool,
     t: &Theme,
-) {
-    // The pane fills its column so the frame stays put; the text inside keeps a readable width.
+) -> u16 {
     let mut block = crate::workspace::pane(t, title, focused);
     let inner = block.inner(area);
     let max = text
@@ -478,6 +537,16 @@ pub fn draw(
     }
     f.render_widget(block, area);
     f.render_widget(Paragraph::new(text).scroll((scroll, 0)), inner);
+    crate::workspace::scrollbar(
+        f,
+        area.inner(ratatui::layout::Margin {
+            horizontal: 0,
+            vertical: 1,
+        }),
+        scroll,
+        max,
+    );
+    max
 }
 
 #[cfg(test)]

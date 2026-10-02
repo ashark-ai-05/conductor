@@ -88,6 +88,37 @@ the mockup are not built.
 Worked means: on the next three questions Krunal opens a source and sends a follow-up
 without a wrong key press. Stop means: he still hunts for the key.
 
+## The text decides the widget (2026-10-02)
+
+Krunal's Amp run at work on 2026-10-02 returned Black-Scholes formulae as raw LaTeX in a
+large empty box. Approved the same day.
+
+When the agent names no layout, conductor reads the answer's text with fixed rules. No
+model is called, and anything a rule cannot read stays as written; `v` shows the original.
+
+| In the text | Shown as |
+|---|---|
+| LaTeX maths (`\[ … \]`, `$$ … $$`, `\( … \)`, `$ … $`) | A formula block in Unicode, one formula per line |
+| A fenced `mermaid` flowchart or sequence diagram | A drawn diagram; other Mermaid kinds show their source |
+| Fenced code | A code block labelled with its language |
+| One Markdown table with a short caption | The selectable table; a numeric column makes it a chart |
+| Three or more `label: value` lines with a short caption | The key facts grid |
+| Anything else | A scrolling document |
+
+Limits: every flowchart is laid out top-down, labels are one line of up to 40 characters,
+and a diagram wider than the pane shows its source. Formula conversion covers fractions,
+roots, Greek letters, common symbols and simple sub- and superscripts; an unknown command
+is shown as typed. Ratatui has charts, tables and a canvas but no diagram widget, so the
+diagram layout is conductor's own.
+
+Also in this change: the frame is at most 180 columns and centred; the answer pane ends
+where its content ends; long answers and expanded evidence scroll with a position bar and
+stop at the end (`Home`, `End`); "no sources" is said once; `t` opens a Questions tab that
+lists the task's questions and shows each answer as it is selected.
+
+Not built: choosing an agent's tools or picking its model from a list. That needs a
+written scope and a check of the real Amp and Copilot CLIs.
+
 ## Runtime boundaries
 
 | Adapter | Available in this implementation | Limits |

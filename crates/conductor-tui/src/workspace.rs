@@ -76,6 +76,8 @@ pub trait TaskSource: RunSource + Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
+    /// The questions asked in this task, to move between their answers.
+    Turns,
     Record,
     Capabilities,
     Sources,
@@ -132,6 +134,8 @@ pub struct Workspace {
     pending: Option<mpsc::Receiver<Result<String, String>>>,
     /// Animation clock, advanced by the event loop while something on screen is moving.
     pub frame: usize,
+    /// How far the answer and the side pane can scroll, as last drawn.
+    pub(crate) limits: std::cell::Cell<(u16, u16)>,
     /// Activity steps on screen, how many of them were there before the last arrival, and
     /// the frame of that arrival: a new step fades in.
     shown: usize,
@@ -183,6 +187,7 @@ impl Workspace {
             clarification: None,
             pending: None,
             frame: 0,
+            limits: std::cell::Cell::new((u16::MAX, u16::MAX)),
             shown: 0,
             seen: 0,
             seen_at: 0,
@@ -204,6 +209,7 @@ impl Workspace {
                 demo_comparison(false).summary,
                 demo_comparison(true).summary,
                 demo_series().summary,
+                demo_document().summary,
                 demo_tests().summary,
                 demo_bug().summary,
                 demo_clarification().summary,
@@ -238,6 +244,7 @@ impl Workspace {
             clarification: None,
             pending: None,
             frame: 0,
+            limits: std::cell::Cell::new((u16::MAX, u16::MAX)),
             shown: 0,
             seen: 0,
             seen_at: 0,
@@ -258,6 +265,7 @@ impl Workspace {
                         "q-comparison" => Some(demo_comparison(false)),
                         "q-forecast" => Some(demo_comparison(true)),
                         "q-series" => Some(demo_series()),
+                        "q-document" => Some(demo_document()),
                         "test-demo" => Some(demo_tests()),
                         "bug-demo" => Some(demo_bug()),
                         _ => None,
@@ -603,7 +611,15 @@ impl Workspace {
 
     fn result_view(&self) -> Option<View> {
         if let Some(answer) = self.current_answer() {
-            answer.presentation().ok().flatten().map(|p| {
+            // The agent may name a layout. When it does not, the text itself decides.
+            let named = answer.presentation();
+            let read = || {
+                // A question back to the person is read as written, never reshaped.
+                (named.is_ok() && !answer.needs_input && answer.input_request.is_none())
+                    .then(|| crate::content::detect(&answer.text, answer.sources.len()))
+                    .flatten()
+            };
+            named.clone().ok().flatten().or_else(read).map(|p| {
                 let mut view = View::answer(p);
                 if self.detail.as_ref().is_some_and(|d| d.native.is_some()) {
                     for row in &mut view.rows {
@@ -687,6 +703,7 @@ impl Workspace {
     fn items(&self) -> usize {
         match self.panel {
             Some(Panel::Record) => 0,
+            Some(Panel::Turns) => self.turns(),
             Some(Panel::Capabilities) => self.capabilities.len(),
             Some(Panel::Sources) => self
                 .current_answer()
@@ -700,6 +717,22 @@ impl Workspace {
             Some(Panel::Evidence) => self.detail.as_ref().map(|d| d.evidence.len()).unwrap_or(0),
             None => 0,
         }
+    }
+
+    fn turns(&self) -> usize {
+        self.detail
+            .as_ref()
+            .and_then(|d| d.question.as_ref())
+            .map_or(0, |q| q.turns.len())
+    }
+    /// Shows another question's answer, from its top.
+    fn show_turn(&mut self, turn: usize) {
+        self.turn = turn.min(self.turns().saturating_sub(1));
+        self.result_row = 0;
+        self.source_filter = None;
+        self.selection_detail = None;
+        self.scroll = 0;
+        self.panel_scroll = 0;
     }
 
     pub fn activity(&self) -> &[Activity] {
@@ -787,10 +820,10 @@ impl Workspace {
             self.record_snapshot = Some(workbench::record(self));
         }
         // Steps read oldest first; the newest is the one worth opening.
-        self.item = if self.panel == Some(Panel::Activity) {
-            self.activity().len().saturating_sub(1)
-        } else {
-            0
+        self.item = match self.panel {
+            Some(Panel::Activity) => self.activity().len().saturating_sub(1),
+            Some(Panel::Turns) => self.turn,
+            _ => 0,
         };
         self.expanded = self.panel == Some(Panel::Record)
             || self.panel == Some(Panel::Sources) && self.items() == 1;
@@ -1282,25 +1315,35 @@ impl Workspace {
                 }
             }
             KeyCode::Char('[' | ']') if question => {
-                let len = self
-                    .detail
-                    .as_ref()
-                    .and_then(|d| d.question.as_ref())
-                    .map(|q| q.turns.len())
-                    .unwrap_or(0);
-                self.result_row = 0;
-                self.source_filter = None;
-                self.selection_detail = None;
-                self.turn = if key.code == KeyCode::Char('[') {
+                self.show_turn(if key.code == KeyCode::Char('[') {
                     self.turn.saturating_sub(1)
                 } else {
-                    (self.turn + 1).min(len.saturating_sub(1))
+                    self.turn + 1
+                });
+                self.item = if self.panel == Some(Panel::Turns) {
+                    self.turn
+                } else {
+                    0
                 };
-                self.scroll = 0;
-                self.item = 0;
                 self.expanded = false;
-                self.panel_scroll = 0;
             }
+            KeyCode::Char('t') if question && self.turns() > 1 => self.toggle_panel(Panel::Turns),
+            // Moving through the questions shows each answer as it is selected.
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k')
+                if self.panel == Some(Panel::Turns) =>
+            {
+                self.item = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) {
+                    (self.item + 1).min(self.turns().saturating_sub(1))
+                } else {
+                    self.item.saturating_sub(1)
+                };
+                self.show_turn(self.item);
+            }
+            KeyCode::Enter if self.panel == Some(Panel::Turns) => self.panel = None,
+            KeyCode::Home if self.panel.is_some() => self.panel_scroll = 0,
+            KeyCode::End if self.panel.is_some() => self.panel_scroll = self.limits.get().1,
+            KeyCode::Home => self.scroll = 0,
+            KeyCode::End => self.scroll = self.limits.get().0,
             KeyCode::Enter if self.panel.is_some() && self.panel != Some(Panel::Record) => {
                 self.expanded = !self.expanded;
                 if self.panel == Some(Panel::Evidence) {
@@ -1366,10 +1409,12 @@ impl Workspace {
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::PageDown => {
                 let step = if key.code == KeyCode::PageDown { 10 } else { 1 };
+                // Stop at the end, so one press up always moves the text.
+                let (answer, panel) = self.limits.get();
                 if self.panel.is_some() {
-                    self.panel_scroll = self.panel_scroll.saturating_add(step)
+                    self.panel_scroll = self.panel_scroll.saturating_add(step).min(panel)
                 } else {
-                    self.scroll = self.scroll.saturating_add(step)
+                    self.scroll = self.scroll.saturating_add(step).min(answer)
                 }
             }
             KeyCode::Up | KeyCode::Char('k') | KeyCode::PageUp => {
@@ -1423,11 +1468,17 @@ pub(crate) fn pane<'a>(t: &Theme, title: &str, focused: bool) -> Block<'a> {
 fn resting_panel(app: &Workspace) -> Option<Panel> {
     let turn = app.current_turn()?;
     let waiting = turn.state == State::Working && app.current_answer().is_none();
+    let cited = app.current_answer().is_some_and(|a| !a.sources.is_empty());
     Some(
         if waiting || (app.clarification_request().is_some() && !app.text_view) {
             Panel::Activity
-        } else {
+        } else if cited {
             Panel::Sources
+        } else if app.turns() > 1 {
+            // Nothing was cited: the other questions are more use than an empty list.
+            Panel::Turns
+        } else {
+            Panel::Activity
         },
     )
 }
@@ -1439,6 +1490,8 @@ fn side_width(width: u16) -> u16 {
 
 /// The width from which the side pane stays open beside the answer without crowding it.
 const ROOMY: u16 = 120;
+/// The widest the frame is drawn.
+const FRAME: u16 = 180;
 
 type Keys = Vec<(&'static str, &'static str)>;
 
@@ -1537,15 +1590,19 @@ fn footer_keys(app: &Workspace) -> (Keys, Keys) {
         );
     }
     let question = app.detail.as_ref().is_some_and(|d| d.question.is_some());
-    let tabs = if question {
-        [("s", "Sources"), ("a", "Activity"), ("h", "Record")]
+    let mut tabs = if question {
+        vec![("s", "Sources"), ("a", "Activity"), ("h", "Record")]
     } else {
-        [("e", "Evidence"), ("a", "Activity"), ("h", "Receipt")]
+        vec![("e", "Evidence"), ("a", "Activity"), ("h", "Receipt")]
     };
+    if app.turns() > 1 {
+        tabs.push(("t", "Questions"));
+    }
     let mut keys = vec![];
     if let Some(panel) = app.panel {
         match panel {
             Panel::Record => keys.push(("↑↓", "Scroll")),
+            Panel::Turns => keys.extend([("↑↓", "Show answer"), ("Enter", "Read it")]),
             _ if app.expanded => keys.extend([("↑↓", "Scroll"), ("Enter", "Collapse")]),
             _ => keys.extend([("↑↓", "Select"), ("Enter", "Expand")]),
         }
@@ -1599,12 +1656,7 @@ fn footer_keys(app: &Workspace) -> (Keys, Keys) {
         if !working && viewing {
             keys.push(("b", "Ask about selection"));
         }
-        if app
-            .detail
-            .as_ref()
-            .and_then(|d| d.question.as_ref())
-            .is_some_and(|q| q.turns.len() > 1)
-        {
+        if app.turns() > 1 {
             keys.push(("[ ]", "Answers"));
         }
         if working {
@@ -1678,18 +1730,58 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
-pub(crate) fn text_block(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>, scroll: u16) {
+/// Wrapped text that scrolls. Returns how far it can scroll; a bar shows when it can.
+pub(crate) fn text_block(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>, scroll: u16) -> u16 {
     let p = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let max = p
-        .line_count(area.width)
-        .saturating_sub(area.height as usize)
-        .min(u16::MAX as usize) as u16;
-    f.render_widget(p.scroll((scroll.min(max), 0)), area);
+    let overflow = |width: u16| {
+        p.line_count(width.max(1))
+            .saturating_sub(area.height as usize)
+            .min(u16::MAX as usize) as u16
+    };
+    if overflow(area.width) == 0 || area.width < 4 {
+        let max = overflow(area.width);
+        f.render_widget(p.scroll((scroll.min(max), 0)), area);
+        return max;
+    }
+    // The text gives up its last two columns to the bar.
+    let text = Rect {
+        width: area.width - 2,
+        ..area
+    };
+    let max = overflow(text.width);
+    f.render_widget(p.scroll((scroll.min(max), 0)), text);
+    scrollbar(f, area, scroll.min(max), max);
+    max
+}
+
+/// A thin position bar on the right edge of `area`.
+pub(crate) fn scrollbar(f: &mut Frame, area: Rect, scroll: u16, max: u16) {
+    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    if max == 0 || area.height < 3 {
+        return;
+    }
+    let mut state = ScrollbarState::new(max as usize).position(scroll as usize);
+    f.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃"),
+        area,
+        &mut state,
+    );
 }
 
 pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
-    let area = f.area();
-    f.render_widget(Block::default().style(t.text().bg(t.background)), area);
+    let screen = f.area();
+    f.render_widget(Block::default().style(t.text().bg(t.background)), screen);
+    // Past this width lines get too long to read, so the frame stays put in the middle.
+    let width = screen.width.min(FRAME);
+    let area = Rect {
+        x: screen.x + (screen.width - width) / 2,
+        width,
+        ..screen
+    };
     let [header, body, status, footer] = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
@@ -1708,11 +1800,13 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
         " CONDUCTOR"
     };
     f.render_widget(
-        Paragraph::new(title).style(t.bold()).block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(t.fg(t.line)),
-        ),
+        Paragraph::new(title)
+            .style(t.fg(t.accent).add_modifier(Modifier::BOLD))
+            .block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(t.fg(t.line)),
+            ),
         brand,
     );
     f.render_widget(
@@ -2070,13 +2164,17 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         State::Cancelled => "–",
         _ => "✓",
     };
-    let mut note = format!(" · {}", clean(&d.context));
+    // The count comes first: on a narrow pane the end of this line is cut off.
+    let mut note = String::new();
     if state != State::Working
         && let Some(answer) = app.current_answer()
     {
         let n = answer.sources.len();
-        note.push_str(&format!(" · {n} source{}", if n == 1 { "" } else { "s" }));
+        if n > 0 {
+            note.push_str(&format!(" · {n} source{}", if n == 1 { "" } else { "s" }));
+        }
     }
+    note.push_str(&format!(" · {}", clean(&d.context)));
     f.render_widget(
         Paragraph::new(vec![
             line(title.lines().next().unwrap_or(""), t.bold()),
@@ -2118,8 +2216,14 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     f.render_widget(Paragraph::new(context).wrap(Wrap { trim: false }), notice);
     let focused = app.panel.is_none() && !composing;
     let view = app.result_view().filter(|_| !app.text_view);
+    // The pane ends where its content ends; a short answer is not lost in an empty box.
+    let fit = |height: u16| Rect {
+        height: height.min(result.height),
+        ..result
+    };
     if let Some(view) = &view {
-        result_view::draw(f, result, view, app.result_row, focused, t);
+        let height = result_view::height(view, result.width);
+        result_view::draw(f, fit(height), view, app.result_row, focused, t);
     } else if app.current_answer().is_some() {
         let text = task_text(app, t, document::inner_width(result.width));
         let title = if app.text_view && app.result_view().is_none() {
@@ -2127,7 +2231,9 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         } else {
             "Answer · Markdown"
         };
-        document::draw(f, result, text, app.scroll, title, focused, t);
+        let height = (text.len().min(u16::MAX as usize - 2) as u16) + 2;
+        let max = document::draw(f, fit(height), text, app.scroll, title, focused, t);
+        app.limits.set((max, app.limits.get().1));
     } else {
         // No answer yet: the step in progress sits where the answer will land.
         let text = match state {
@@ -2146,7 +2252,7 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             )],
             _ => vec![line("No answer was recorded for this request.", t.dim())],
         };
-        document::draw(f, result, text, 0, "Answer", focused, t);
+        document::draw(f, fit(3), text, 0, "Answer", focused, t);
     }
     if composing {
         draw_input(f, composer, app, t, " Follow up ");
@@ -2295,9 +2401,11 @@ fn draw_task(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             Some("application/json") => "Data · JSON",
             _ => "Document · Text",
         };
-        document::draw(f, result, text, app.scroll, title, focused, t);
+        let max = document::draw(f, result, text, app.scroll, title, focused, t);
+        app.limits.set((max, app.limits.get().1));
     } else {
-        text_block(f, result, text, app.scroll);
+        let max = text_block(f, result, text, app.scroll);
+        app.limits.set((max, app.limits.get().1));
     }
     f.render_widget(
         Block::default()
@@ -2440,28 +2548,6 @@ fn task_text(app: &Workspace, t: &Theme, width: u16) -> Vec<Line<'static>> {
             lines.push(Line::raw(""));
         }
         lines.extend(document::lines(&answer.text, width, t, &answer.sources));
-        if answer.needs_input && answer.sources.is_empty() {
-            return lines;
-        }
-        lines.push(Line::raw(""));
-        lines.extend(document::wrap(
-            &[Span::styled(
-                if answer.sources.is_empty() {
-                    "No sources cited.".into()
-                } else {
-                    format!(
-                        "{} source{}",
-                        answer.sources.len(),
-                        if answer.sources.len() == 1 { "" } else { "s" }
-                    )
-                },
-                t.dim(),
-            )],
-            width,
-            "",
-            "",
-            true,
-        ));
         lines
     } else if app
         .current_turn()
@@ -2551,7 +2637,8 @@ fn draw_change(f: &mut Frame, area: Rect, app: &Workspace, checks: Option<&View>
                 )
             })
             .collect();
-        text_block(f, inner, lines, app.scroll);
+        let max = text_block(f, inner, lines, app.scroll);
+        app.limits.set((max, app.limits.get().1));
     }
     if let Some(area) = report {
         let block = Block::default()
@@ -2611,7 +2698,11 @@ fn panel_tabs(app: &Workspace, panel: Panel, focused: bool, t: &Theme) -> Line<'
         return Line::raw("");
     };
     let steps = format!("Activity {}", app.activity().len());
-    let tabs = if d.question.is_some() {
+    let mut tabs = vec![];
+    if app.turns() > 1 {
+        tabs.push((Panel::Turns, format!("Questions {}", app.turns())));
+    }
+    if d.question.is_some() {
         let sources = if app.source_filter.is_some() && focused {
             "Sources · selected row".into()
         } else {
@@ -2620,30 +2711,31 @@ fn panel_tabs(app: &Workspace, panel: Panel, focused: bool, t: &Theme) -> Line<'
                 app.current_answer().map_or(0, |a| a.sources.len())
             )
         };
-        [
+        tabs.extend([
             (Panel::Sources, sources),
             (Panel::Activity, steps),
             (Panel::Record, "Record".into()),
-        ]
+        ]);
     } else {
-        [
+        tabs.extend([
             (Panel::Evidence, format!("Evidence {}", d.evidence.len())),
             (Panel::Activity, steps),
             (Panel::Record, "Receipt".into()),
-        ]
-    };
+        ]);
+    }
+    // The tab on show is a filled chip; it takes the accent when the pane has the keys.
     let mut spans = vec![Span::raw(" ")];
     for (tab, label) in tabs {
         let style = if tab != panel {
             t.dim()
         } else if focused {
-            t.fg(t.accent).add_modifier(Modifier::BOLD)
+            t.fg(t.accent).bg(t.sel).add_modifier(Modifier::BOLD)
         } else {
-            t.text()
+            t.text().bg(t.surface)
         };
-        spans.push(Span::styled(label, style));
-        spans.push(Span::raw(if tab == Panel::Record { " " } else { "  " }));
+        spans.push(Span::styled(format!(" {label} "), style));
     }
+    spans.push(Span::raw(" "));
     Line::from(spans)
 }
 
@@ -2683,6 +2775,44 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
     let mut rows: Vec<PanelRow> = vec![];
     match panel {
         Panel::Record => {}
+        Panel::Turns => {
+            let turns = app
+                .detail
+                .as_ref()
+                .and_then(|d| d.question.as_ref())
+                .map_or(&[][..], |q| q.turns.as_slice());
+            for (i, turn) in turns.iter().enumerate() {
+                let current = i == app.turn;
+                let glyph = match turn.state {
+                    State::Working => spinner(app.frame),
+                    State::Stopped => "!",
+                    State::NeedsInput => "?",
+                    State::Cancelled => "–",
+                    _ => "✓",
+                };
+                let asked = clean(turn.question.lines().next().unwrap_or(""));
+                let mut lines = document::wrap(
+                    &[
+                        Span::styled(format!("{glyph} "), state_style(t, turn.state)),
+                        Span::styled(
+                            format!("{}. {asked}", i + 1),
+                            if current { t.bold() } else { t.dim() },
+                        ),
+                    ],
+                    width,
+                    "",
+                    "     ",
+                    true,
+                );
+                lines.truncate(2);
+                rows.push(PanelRow {
+                    title: asked,
+                    detail: String::new(),
+                    failed: false,
+                    lines,
+                });
+            }
+        }
         Panel::Capabilities => {
             for item in &app.capabilities {
                 let detail = item
@@ -2765,6 +2895,13 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
                 } else {
                     ("✓", t.fg(t.pass), t.text())
                 };
+                // Who did the step is said in words; the colour only makes it quicker to find.
+                let actor_style = t.fg(match a.actor.as_str() {
+                    "You" => t.blocked,
+                    "Agent" => t.run,
+                    "Tool" => t.warn,
+                    _ => t.dim,
+                });
                 let used =
                     2 + Line::raw(title.as_str()).width() + Line::raw(actor.as_str()).width();
                 let gap = (width as usize).saturating_sub(used).max(2);
@@ -2773,7 +2910,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
                         Span::styled(format!("{glyph} "), glyph_style),
                         Span::styled(title.clone(), title_style),
                         Span::raw(" ".repeat(gap)),
-                        Span::styled(actor, t.dim()),
+                        Span::styled(actor, actor_style),
                     ])],
                     title,
                     detail: format!("{} · {}\n\n{}", a.at, a.actor, a.detail),
@@ -2789,7 +2926,8 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
                     Line::raw(""),
                 ];
                 lines.extend(captured_text(detail, t, content.width));
-                text_block(f, content, lines, app.panel_scroll);
+                let max = text_block(f, content, lines, app.panel_scroll);
+                app.limits.set((app.limits.get().0, max));
                 return;
             }
             if let Some(d) = &app.detail {
@@ -2821,6 +2959,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
             .filter(|kind| *kind != conductor_model::agent::AgentKind::Claude);
         let why = match panel {
             Panel::Record => "No record selected.".into(),
+            Panel::Turns => "No questions yet.".into(),
             Panel::Capabilities => "No operations available. Questions remain available with n. Register reports with conductor capability add.".into(),
             Panel::Sources if filter.is_some() => {
                 "No source attached to this row. s shows all answer sources.".into()
@@ -2857,7 +2996,8 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
                 Line::raw(""),
             ];
             lines.extend(captured_text(&row.detail, t, content.width));
-            text_block(f, content, lines, app.panel_scroll);
+            let max = text_block(f, content, lines, app.panel_scroll);
+            app.limits.set((app.limits.get().0, max));
         }
     } else {
         let count = rows.len();
@@ -2955,6 +3095,61 @@ pub fn demo_task() -> TaskDetail {
             }],
         }),
     }
+}
+
+/// An answer the agent gave no layout for: formulae, a diagram and code in plain Markdown.
+/// The text alone decides how each part is drawn.
+pub fn demo_document() -> TaskDetail {
+    let mut detail = demo_task();
+    detail.summary.id = "q-document".into();
+    detail.summary.title = "Pricing an FX vanilla option".into();
+    detail.context = "No tools · No live sources · No project files supplied".into();
+    let q = detail.question.as_mut().unwrap();
+    q.id = "q-document".into();
+    q.title = detail.summary.title.clone();
+    q.agent.kind = conductor_model::agent::AgentKind::Amp;
+    let turn = &mut q.turns[0];
+    turn.question = "black scholes formula for fx vanilla options".into();
+    turn.activity.remove(1);
+    turn.answer = Some(Answer {
+        text: r#"## Garman-Kohlhagen
+
+Black-Scholes with two interest rates. For spot \(S\) quoted as domestic units per one foreign unit:
+
+\[C = S e^{-r_f T} N(d_1) - K e^{-r_d T} N(d_2)\]
+\[P = K e^{-r_d T} N(-d_2) - S e^{-r_f T} N(-d_1)\]
+\[d_1 = \frac{\ln(S/K) + (r_d - r_f + \tfrac{1}{2}\sigma^2)T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}\]
+
+Here \(r_d\) and \(r_f\) are the domestic and foreign rates, \(\sigma\) is the implied vol and \(T\) is the time to expiry in years.
+
+### How a price is produced
+
+```mermaid
+graph TD
+  A[Market data] --> B(Forward and discount factors)
+  B --> C{Call or put?}
+  C -->|call| D[Call premium]
+  C -->|put| E[Put premium]
+```
+
+### In code
+
+```python
+d1 = (log(S / K) + (rd - rf + 0.5 * vol**2) * T) / (vol * sqrt(T))
+d2 = d1 - vol * sqrt(T)
+```
+
+- The result is the domestic-currency premium per one unit of foreign notional.
+- Put-call parity: \(C - P = S e^{-r_f T} - K e^{-r_d T}\).
+
+Illustrative demo text; not checked against a source."#
+            .into(),
+        sources: vec![],
+        needs_input: false,
+        input_request: None,
+        presentation: None,
+    });
+    detail
 }
 
 /// Illustrative comparison and forecast views, available in the interactive demo task list.
