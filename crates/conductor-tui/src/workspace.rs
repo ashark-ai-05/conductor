@@ -19,7 +19,8 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph, Wrap,
+        Block, BorderType, Borders, HighlightSpacing, List, ListItem, ListState, Padding,
+        Paragraph, Wrap,
     },
 };
 use std::sync::{Arc, mpsc};
@@ -1455,12 +1456,35 @@ fn spinner(frame: usize) -> &'static str {
 
 /// A bordered pane. Only the pane that takes the arrow keys is drawn in the accent colour.
 pub(crate) fn pane<'a>(t: &Theme, title: &str, focused: bool) -> Block<'a> {
+    let label = Span::styled(
+        format!(" {} ", clean(title)),
+        if focused {
+            t.fg(t.accent).bg(t.sel).add_modifier(Modifier::BOLD)
+        } else {
+            t.dim()
+        },
+    );
     Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .padding(Padding::horizontal(1))
         .border_style(t.fg(if focused { t.accent } else { t.line }))
-        .title(format!(" {} ", clean(title)))
-        .title_style(if focused { t.fg(t.accent) } else { t.dim() })
+        .title(Line::from(vec![Span::raw(" "), label, Span::raw(" ")]))
+}
+
+/// The state as a filled label: a glyph and a word, on a tint of the state's colour.
+fn state_pill(t: &Theme, state: State, glyph: &str, label: &str) -> Span<'static> {
+    let (fg, bg) = match state {
+        State::Working => (t.run, t.sel),
+        State::Stopped => (t.fail, t.fail_bg),
+        State::NeedsInput => (t.warn, t.blocked_bg),
+        State::Cancelled => (t.dim, t.surface),
+        _ => (t.pass, t.pass_bg),
+    };
+    Span::styled(
+        format!(" {glyph} {label} "),
+        t.fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+    )
 }
 
 /// The tab the side pane shows while the answer has the focus: the steps during the wait,
@@ -1485,13 +1509,11 @@ fn resting_panel(app: &Workspace) -> Option<Panel> {
 
 /// The side pane takes about a third of a wide screen, within readable limits.
 fn side_width(width: u16) -> u16 {
-    (width * 3 / 10).clamp(43, 56)
+    (width * 3 / 10).clamp(43, 96)
 }
 
 /// The width from which the side pane stays open beside the answer without crowding it.
 const ROOMY: u16 = 120;
-/// The widest the frame is drawn.
-const FRAME: u16 = 180;
 
 type Keys = Vec<(&'static str, &'static str)>;
 
@@ -1695,7 +1717,10 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     let width = area.width as usize;
     let cell = |(key, label): &(&str, &str)| Line::raw(format!("{key} {label}")).width() + 2;
     let push = |spans: &mut Vec<Span<'static>>, (key, label): &(&'static str, &'static str)| {
-        spans.push(Span::styled(*key, t.fg(t.accent)));
+        spans.push(Span::styled(
+            *key,
+            t.fg(t.accent).add_modifier(Modifier::BOLD),
+        ));
         spans.push(Span::styled(format!(" {label}  "), t.dim()));
     };
     // A wide row keeps the keys that work everywhere on the right; the focused pane's
@@ -1728,7 +1753,10 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             push(&mut spans, item);
         }
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::new().bg(t.surface)),
+        area,
+    );
 }
 /// Wrapped text that scrolls. Returns how far it can scroll; a bar shows when it can.
 pub(crate) fn text_block(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>, scroll: u16) -> u16 {
@@ -1773,15 +1801,8 @@ pub(crate) fn scrollbar(f: &mut Frame, area: Rect, scroll: u16, max: u16) {
 }
 
 pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
-    let screen = f.area();
-    f.render_widget(Block::default().style(t.text().bg(t.background)), screen);
-    // Past this width lines get too long to read, so the frame stays put in the middle.
-    let width = screen.width.min(FRAME);
-    let area = Rect {
-        x: screen.x + (screen.width - width) / 2,
-        width,
-        ..screen
-    };
+    let area = f.area();
+    f.render_widget(Block::default().style(t.text().bg(t.background)), area);
     let [header, body, status, footer] = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
@@ -1794,31 +1815,19 @@ pub fn draw(f: &mut Frame, app: &Workspace, t: &Theme) {
         Constraint::Length(if area.width >= 100 { 38 } else { 0 }),
     ])
     .areas(header);
-    let title = if app.demo {
-        " CONDUCTOR / demo · illustrative data"
-    } else {
-        " CONDUCTOR"
-    };
-    f.render_widget(
-        Paragraph::new(title)
-            .style(t.fg(t.accent).add_modifier(Modifier::BOLD))
-            .block(
-                Block::default()
-                    .borders(Borders::BOTTOM)
-                    .border_style(t.fg(t.line)),
-            ),
-        brand,
-    );
+    let bar = Style::new().bg(t.surface);
+    let chip = t.fg(t.background).bg(t.accent).add_modifier(Modifier::BOLD);
+    let mut name = vec![Span::styled(" CONDUCTOR ", chip)];
+    if app.demo {
+        name.push(Span::styled("  demo · illustrative data", t.dim()));
+    }
+    let strip = |area: Rect| Rect { height: 1, ..area };
+    f.render_widget(Paragraph::new(Line::from(name)).style(bar), strip(brand));
     f.render_widget(
         Paragraph::new(format!("{} ", clean(&workbench::agent_label(app))))
             .alignment(ratatui::layout::Alignment::Right)
-            .style(t.dim())
-            .block(
-                Block::default()
-                    .borders(Borders::BOTTOM)
-                    .border_style(t.fg(t.line)),
-            ),
-        runtime,
+            .style(t.text().bg(t.surface)),
+        strip(runtime),
     );
     let padded = ratatui::layout::Margin {
         horizontal: 2,
@@ -2013,6 +2022,7 @@ fn draw_compose(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
 fn draw_input(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme, title: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(t.fg(if app.workflow_focus { t.line } else { t.accent }))
         .title(title.to_owned());
     let inner = block.inner(area);
@@ -2177,9 +2187,12 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
     note.push_str(&format!(" · {}", clean(&d.context)));
     f.render_widget(
         Paragraph::new(vec![
-            line(title.lines().next().unwrap_or(""), t.bold()),
             Line::from(vec![
-                Span::styled(format!("{glyph} {}", state.label()), state_style(t, state)),
+                Span::styled("❯ ", t.fg(t.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(clean(title.lines().next().unwrap_or("")), t.bold()),
+            ]),
+            Line::from(vec![
+                state_pill(t, state, glyph, state.label()),
                 Span::styled(note, t.dim()),
             ]),
         ]),
@@ -2261,7 +2274,8 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             Line::styled(" Follow up when the answer arrives", t.dim())
         } else {
             Line::from(vec![
-                Span::styled(" f", t.fg(t.accent)),
+                Span::styled(" ❯ ", t.fg(t.accent).add_modifier(Modifier::BOLD)),
+                Span::styled("f", t.fg(t.accent)),
                 Span::styled("  Ask about this answer…", t.dim()),
             ])
         };
@@ -2269,6 +2283,7 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             Paragraph::new(prompt).block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .style(t.text().bg(t.surface))
                     .border_style(t.fg(t.line)),
             ),
@@ -2750,6 +2765,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
     let block = Block::default()
         .title(panel_tabs(app, panel, focused, t))
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .padding(Padding::new(1, 1, 1, 0))
         .border_style(t.fg(if focused { t.accent } else { t.line }));
     let content = block.inner(area);

@@ -65,7 +65,7 @@ pub fn draw(
     t: &Theme,
 ) {
     let area = Rect {
-        width: area.width.min(document::MAX_WIDTH),
+        width: area.width.min(100),
         ..area
     };
     let block = Block::default()

@@ -1100,7 +1100,7 @@ fn composer_bottom(text: &str) -> usize {
     let lines: Vec<_> = text.lines().collect();
     lines
         .iter()
-        .rposition(|line| line.chars().take(60).any(|c| c == '└'))
+        .rposition(|line| line.chars().take(60).any(|c| c == '╰'))
         .unwrap()
 }
 
@@ -1258,9 +1258,26 @@ fn the_questions_tab_moves_between_answers() {
 }
 
 #[test]
-fn a_very_wide_screen_keeps_the_frame_in_the_middle() {
-    let text = render(&Workspace::demo(), 300, 30);
+fn a_very_wide_screen_is_used_edge_to_edge() {
+    let mut app = Workspace::demo();
+    app.open("q-document");
+    let text = render(&app, 300, 40);
     let brand = text.lines().next().unwrap();
-    let start = brand.chars().position(|c| c == 'C').unwrap();
-    assert!((55..=65).contains(&start), "frame starts at {start}");
+    assert!(
+        brand.starts_with(" CONDUCTOR"),
+        "the frame starts at the left edge"
+    );
+    let widest = text
+        .lines()
+        .filter(|line| line.contains("Black-Scholes with two interest rates"))
+        .map(|line| line.trim_end().chars().count())
+        .max()
+        .unwrap();
+    assert!(widest > 150, "prose runs across the pane: {widest}");
+    let edge = text
+        .lines()
+        .filter_map(|line| line.rfind('╮'))
+        .max()
+        .unwrap();
+    assert!(edge > 290, "the side pane reaches the right edge");
 }
