@@ -1,7 +1,7 @@
 //! CommonMark to terminal cells. Parsing, layout and scrolling never invoke an agent.
 use crate::{theme::Theme, workspace::clean};
 use conductor_model::task::Citation;
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -12,9 +12,9 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-pub const MAX_WIDTH: u16 = 100;
+/// The text width inside a pane of `width`: the pane's full width, less border and padding.
 pub fn inner_width(width: u16) -> u16 {
-    width.min(MAX_WIDTH).saturating_sub(4).max(1)
+    width.saturating_sub(4).max(1)
 }
 
 /// Wrap styled graphemes with hanging indentation; code keeps its whitespace.
@@ -364,9 +364,13 @@ pub fn lines(text: &str, width: u16, t: &Theme, citations: &[Citation]) -> Vec<L
                     r.gap();
                 }
             }
-            Event::Start(Tag::Heading { .. }) => {
+            Event::Start(Tag::Heading { level, .. }) => {
                 r.gap();
                 r.push_style(t.bold().fg(t.accent));
+                // Top headings carry a bar, so sections stand out when scrolling.
+                if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
+                    r.current.push(Span::styled("▍", t.fg(t.run)));
+                }
             }
             Event::End(TagEnd::Heading(_)) => {
                 r.flush();

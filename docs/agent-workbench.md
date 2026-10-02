@@ -111,7 +111,8 @@ roots, Greek letters, common symbols and simple sub- and superscripts; an unknow
 is shown as typed. Ratatui has charts, tables and a canvas but no diagram widget, so the
 diagram layout is conductor's own.
 
-Also in this change: the frame is at most 180 columns and centred; the answer pane ends
+Also in this change: the frame uses the full width of its pane (a 180-column centred frame
+was tried and dropped the same day: it left most of a wide monitor empty); the answer pane ends
 where its content ends; long answers and expanded evidence scroll with a position bar and
 stop at the end (`Home`, `End`); "no sources" is said once; `t` opens a Questions tab that
 lists the task's questions and shows each answer as it is selected.
