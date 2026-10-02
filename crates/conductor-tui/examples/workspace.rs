@@ -21,6 +21,9 @@ fn main() {
     if args.iter().any(|s| s == "series") {
         app.open("q-series");
     }
+    if args.iter().any(|s| s == "document") {
+        app.open("q-document");
+    }
     if args.iter().any(|s| s == "tests") {
         app.open("test-demo");
     }

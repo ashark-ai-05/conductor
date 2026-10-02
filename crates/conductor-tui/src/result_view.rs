@@ -726,12 +726,23 @@ fn draw_series(f: &mut Frame, area: Rect, view: &View, selected: usize, focused:
         .map(|(i, v)| (i as f64, *v))
         .collect();
     let highlight = [points[selected]];
+    let ordered = view.rows.iter().all(|r| {
+        r.cells[0]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+    });
     let low = values.iter().copied().fold(f64::INFINITY, f64::min);
     let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let pad = ((high - low) * 0.15).max(1.0);
     let datasets = vec![
         Dataset::default()
-            .graph_type(GraphType::Line)
+            // Times and numbers run in order, so a line joins them; names get a bar each.
+            .graph_type(if ordered {
+                GraphType::Line
+            } else {
+                GraphType::Bar
+            })
             .marker(Marker::HalfBlock)
             .style(t.fg(t.accent))
             .data(&points),
