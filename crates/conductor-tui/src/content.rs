@@ -531,41 +531,59 @@ fn table(lines: &[&str], sources: usize) -> Option<Presentation> {
         return None;
     }
     let (title, summary) = caption(&prose, &columns.join(" · "))?;
-    // One number per row over an ordered first column reads better as a chart.
-    let measures: Option<Vec<_>> = rows.iter().map(|r| measure(&r.cells[1])).collect();
-    if let Some(measures) = measures.filter(|_| rows.len() >= 3 && columns.len() <= 3)
-        && measures.iter().all(|(_, unit)| *unit == measures[0].1)
-    {
-        let unit = if measures[0].1.is_empty() {
-            columns[1].clone()
-        } else {
-            measures[0].1.clone()
-        };
-        return Some(Presentation::Series {
-            title,
-            summary,
-            unit,
-            points: rows
-                .into_iter()
-                .zip(measures)
-                .map(|(row, (value, _))| SeriesPoint {
-                    detail: row
-                        .cells
-                        .get(2)
-                        .cloned()
-                        .unwrap_or_else(|| format!("{}: {}", row.cells[0], row.cells[1])),
-                    label: row.cells[0].clone(),
-                    value,
-                    sources: row.sources,
-                })
-                .collect(),
-        });
-    }
     Some(Presentation::Table {
         title,
         summary,
         columns,
         rows,
+    })
+}
+
+/// An explicit display choice. Numeric data alone never establishes temporal ordering.
+pub fn chart(view: &Presentation) -> Option<Presentation> {
+    if let Presentation::Series { .. } = view {
+        return Some(view.clone());
+    }
+    let Presentation::Table {
+        title,
+        summary,
+        columns,
+        rows,
+    } = view
+    else {
+        return None;
+    };
+    let measures: Option<Vec<_>> = rows.iter().map(|r| measure(r.cells.get(1)?)).collect();
+    let measures = measures.filter(|_| rows.len() >= 2 && columns.len() <= 3)?;
+    if !measures
+        .iter()
+        .all(|(value, unit)| value.is_finite() && value.abs() <= 1e12 && *unit == measures[0].1)
+    {
+        return None;
+    }
+    let unit = if measures[0].1.is_empty() {
+        columns[1].clone()
+    } else {
+        measures[0].1.clone()
+    };
+    Some(Presentation::Series {
+        title: title.clone(),
+        summary: summary.clone(),
+        unit,
+        points: rows
+            .iter()
+            .zip(measures)
+            .map(|(row, (value, _))| SeriesPoint {
+                label: row.cells[0].clone(),
+                value,
+                detail: row
+                    .cells
+                    .get(2)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}: {}", row.cells[0], row.cells[1])),
+                sources: row.sources.clone(),
+            })
+            .collect(),
     })
 }
 
@@ -616,7 +634,7 @@ fn facts(lines: &[&str], sources: usize) -> Option<Presentation> {
 }
 
 /// The widget an answer's text calls for, when the agent did not name one: a lone table
-/// becomes a selectable table or a chart, a list of `label: value` lines becomes key facts.
+/// becomes a selectable table, a list of `label: value` lines becomes key facts.
 /// Mixed or long text returns `None` and is shown as a document.
 pub fn detect(text: &str, sources: usize) -> Option<Presentation> {
     let lines: Vec<&str> = text.lines().collect();
@@ -654,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_table_is_a_table_and_measurements_in_order_are_a_chart() {
+    fn tables_stay_tables_until_the_person_requests_a_chart() {
         let text = "## Retry strategies\n\nTwo common choices.\n\n| Strategy | Wait | Fits |\n|---|---|---|\n| Backoff | Doubles [1] | Shared services |\n| Fixed | Constant | Simple jobs |";
         let Some(Presentation::Table {
             title,
@@ -672,7 +690,9 @@ mod tests {
         assert_eq!(rows[0].sources, [1]);
         let chart =
             "| Hour | Temp |\n|---|---|\n| 06:00 | 17 °C |\n| 12:00 | 24 °C |\n| 18:00 | 21 °C |";
-        let Some(Presentation::Series { unit, points, .. }) = detect(chart, 0) else {
+        let table = detect(chart, 0).unwrap();
+        assert!(matches!(table, Presentation::Table { .. }));
+        let Some(Presentation::Series { unit, points, .. }) = self::chart(&table) else {
             panic!("expected a chart");
         };
         assert_eq!(unit, "°C");

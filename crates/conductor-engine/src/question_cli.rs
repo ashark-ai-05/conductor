@@ -1,5 +1,4 @@
-//! Copilot and Amp question adapters. Presentation is data. Copilot sessions expose no
-//! tools; Amp's are on only when the question's selection says so.
+//! CLI question adapters. Runtime JSON events become saved activity, never executable UI.
 use super::question_agent::program;
 use conductor_model::agent::{AgentKind, AgentSelection};
 use serde_json::{Value, json};
@@ -65,6 +64,40 @@ pub fn argv(selection: &AgentSelection, prompt: String, scratch: &Path) -> io::R
             }
             args.extend(["--execute".into(), prompt]);
         }
+        AgentKind::Codex => {
+            // Keep user authentication/rules; never escalate a read-only question.
+            args.extend(
+                [
+                    "exec",
+                    "--json",
+                    "--ephemeral",
+                    "--skip-git-repo-check",
+                    "--sandbox",
+                    "read-only",
+                    "--color",
+                    "never",
+                    "-c",
+                    "approval_policy=\"never\"",
+                ]
+                .map(str::to_owned),
+            );
+            if let Some(model) = &selection.model {
+                args.extend(["--model".into(), model.clone()]);
+            }
+            args.extend(["--".into(), prompt]);
+        }
+        AgentKind::Hermes => {
+            // Use the documented noninteractive stream, retaining the user's permissions.
+            // In particular, do not pass --yolo or silently replace user configuration.
+            args.extend(["chat", "--oneshot", "--format", "stream-json"].map(str::to_owned));
+            if let Some(model) = &selection.model {
+                args.extend(["--model".into(), model.clone()]);
+            }
+            // A file keeps a prompt beginning with '-' out of the option parser.
+            let query = scratch.join("question.txt");
+            std::fs::write(&query, prompt)?;
+            args.extend(["--query-file".into(), query.to_string_lossy().into_owned()]);
+        }
         _ => return Err(io::Error::other("Unsupported question CLI")),
     }
     Ok(args)
@@ -127,6 +160,8 @@ impl Stream {
         match kind {
             AgentKind::Copilot => self.copilot(&event),
             AgentKind::Amp => self.amp(&event),
+            AgentKind::Codex => self.codex(&event),
+            AgentKind::Hermes => self.hermes(&event),
             _ => None,
         }
     }
@@ -159,6 +194,101 @@ impl Stream {
                 }
             ),
         )
+    }
+    fn codex(&mut self, e: &Value) -> Option<Update> {
+        match e["type"].as_str()? {
+            "thread.started" => self.update("Agent connected", "Codex session started with a read-only local sandbox; runtime MCP configuration still applies.".into()),
+            "turn.failed" | "error" => self.fail(e["error"]["message"].as_str()
+                .or(e["message"].as_str()).unwrap_or("Codex failed before completing the answer.").into()),
+            "turn.completed" => {
+                let usage = &e["usage"];
+                self.tokens = usage["input_tokens"].as_u64().zip(usage["output_tokens"].as_u64())
+                    .map(|(i,o)| i.saturating_add(o)); // cached input is already included
+                self.finished = self.error.is_none() && !self.text.trim().is_empty();
+                self.received()
+            }
+            "item.started" | "item.completed" | "item.updated" => {
+                let item = &e["item"];
+                let complete = e["type"] == "item.completed";
+                match item["type"].as_str()? {
+                    "agent_message" if complete => {
+                        self.text = item["text"].as_str().unwrap_or_default().into();
+                        None
+                    }
+                    // Reasoning is private; it is not activity or source evidence.
+                    "reasoning" | "agent_message" => None,
+                    "command_execution" | "mcp_tool_call" | "web_search" | "file_change" => {
+                        if !self.tools { return self.unexpected_tools(); }
+                        if e["type"] == "item.updated" { return None; }
+                        let failed = item["status"] == "failed" || item["exit_code"].as_i64().is_some_and(|n| n != 0) || !item["error"].is_null();
+                        let detail = serde_json::to_string(item).unwrap_or_default();
+                        Some(Update {title: if complete { "Tool returned" } else { "Using a tool" },
+                            detail: bounded(&detail), failed })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    fn hermes(&mut self, e: &Value) -> Option<Update> {
+        match e["type"].as_str()? {
+            "system" if e["subtype"] == "init" => {
+                self.model = e["model"].as_str().map(str::to_owned);
+                self.update("Agent connected", "Hermes session started under its configured tool permissions. No Conductor sandbox is provided.".into())
+            }
+            "tool_use" | "tool_result" => {
+                if !self.tools {
+                    return self.unexpected_tools();
+                }
+                // Hermes does not promise call IDs, so don't invent a correlation or a
+                // source capture. These events are observations in Activity only.
+                let result = e["type"] == "tool_result";
+                Some(Update {
+                    title: if result {
+                        "Tool returned"
+                    } else {
+                        "Using a tool"
+                    },
+                    detail: bounded(&format!(
+                        "{}\n{}{}",
+                        e["name"].as_str().unwrap_or("Tool"),
+                        if result {
+                            e["output"].as_str().unwrap_or_default().to_owned()
+                        } else {
+                            e["input"].to_string()
+                        },
+                        if result {
+                            "\nHermes limits tool output to 5000 characters. This event is not an independently captured source."
+                        } else {
+                            ""
+                        }
+                    )),
+                    failed: result && e["is_error"] == true,
+                })
+            }
+            "result" => {
+                self.text = e["text"].as_str().unwrap_or_default().into();
+                self.tokens = e["tokens"]["total"].as_u64().or_else(|| {
+                    e["tokens"]["input"]
+                        .as_u64()
+                        .zip(e["tokens"]["output"].as_u64())
+                        .map(|(i, o)| i.saturating_add(o))
+                });
+                if e["exit_code"] != 0 || !e["error"].is_null() {
+                    return self.fail(
+                        e["error"]
+                            .as_str()
+                            .unwrap_or("Hermes did not complete the answer.")
+                            .into(),
+                    );
+                }
+                self.finished = self.error.is_none() && !self.text.trim().is_empty();
+                self.received()
+            }
+            // Do not persist intermediate text deltas as the authoritative answer.
+            _ => None,
+        }
     }
     fn copilot(&mut self, e: &Value) -> Option<Update> {
         let d = &e["data"];
@@ -336,4 +466,12 @@ fn amp_tokens(usage: &Value) -> Option<u64> {
             .saturating_add(usage["cache_creation_input_tokens"].as_u64().unwrap_or(0))
             .saturating_add(usage["cache_read_input_tokens"].as_u64().unwrap_or(0)),
     )
+}
+
+fn bounded(text: &str) -> String {
+    let mut result: String = text.chars().take(24_000).collect();
+    if text.chars().count() > 24_000 {
+        result.push_str("\n[Activity output truncated]");
+    }
+    result
 }

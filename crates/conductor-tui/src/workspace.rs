@@ -100,6 +100,9 @@ pub struct Workspace {
     pub agent_picker: Option<workbench::AgentPicker>,
     pub record_snapshot: Option<(String, String)>,
     follow_up_drafts: std::collections::HashMap<String, String>,
+    section_focus: std::collections::HashMap<(String, usize), usize>,
+    // Display choices belong to a task, answer and stable section, never another answer.
+    chart_choices: std::collections::HashMap<(String, usize, String), bool>,
     source: Option<Arc<dyn TaskSource>>,
     pub tasks: Vec<TaskSummary>,
     pub capabilities: Vec<Available>,
@@ -154,6 +157,8 @@ impl Workspace {
             agent_picker: None,
             record_snapshot: None,
             follow_up_drafts: Default::default(),
+            section_focus: Default::default(),
+            chart_choices: Default::default(),
             capabilities: vec![],
             host,
             source: Some(source),
@@ -202,6 +207,8 @@ impl Workspace {
             agent_picker: None,
             record_snapshot: None,
             follow_up_drafts: Default::default(),
+            section_focus: Default::default(),
+            chart_choices: Default::default(),
             capabilities: vec![],
             source: None,
             host: None,
@@ -211,6 +218,7 @@ impl Workspace {
                 demo_comparison(true).summary,
                 demo_series().summary,
                 demo_document().summary,
+                demo_composed().summary,
                 demo_tests().summary,
                 demo_bug().summary,
                 demo_clarification().summary,
@@ -267,6 +275,7 @@ impl Workspace {
                         "q-forecast" => Some(demo_comparison(true)),
                         "q-series" => Some(demo_series()),
                         "q-document" => Some(demo_document()),
+                        "q-composed" => Some(demo_composed()),
                         "test-demo" => Some(demo_tests()),
                         "bug-demo" => Some(demo_bug()),
                         _ => None,
@@ -610,25 +619,106 @@ impl Workspace {
         self.current_turn().is_some_and(|q| q.answer.is_none()) && self.current_answer().is_some()
     }
 
-    fn result_view(&self) -> Option<View> {
-        if let Some(answer) = self.current_answer() {
-            // The agent may name a layout. When it does not, the text itself decides.
-            let named = answer.presentation();
-            let read = || {
-                // A question back to the person is read as written, never reshaped.
-                (named.is_ok() && !answer.needs_input && answer.input_request.is_none())
+    fn answer_key(&self) -> (String, usize) {
+        let index = self
+            .detail
+            .as_ref()
+            .and_then(|d| d.question.as_ref())
+            .and_then(|q| {
+                self.answer_turn()
+                    .and_then(|answer| q.turns.iter().position(|t| std::ptr::eq(t, answer)))
+            })
+            .unwrap_or(self.turn);
+        (
+            self.detail
+                .as_ref()
+                .map(|d| d.summary.id.clone())
+                .unwrap_or_default(),
+            index,
+        )
+    }
+
+    fn answer_sections(&self) -> Vec<conductor_model::task::AnswerSection> {
+        self.current_answer()
+            .filter(|a| !a.needs_input && a.input_request.is_none())
+            .and_then(|a| a.sections().ok())
+            .unwrap_or_default()
+    }
+
+    fn section_index(&self) -> usize {
+        self.section_focus
+            .get(&self.answer_key())
+            .copied()
+            .unwrap_or(0)
+            .min(self.answer_sections().len().saturating_sub(1))
+    }
+
+    fn chosen_view(&self, p: Presentation, id: &str) -> View {
+        let (task, turn) = self.answer_key();
+        let choice = self.chart_choices.get(&(task, turn, id.to_owned()));
+        let p = if choice == Some(&true) {
+            crate::content::chart(&p).unwrap_or(p)
+        } else {
+            p
+        };
+        let mut view = View::answer(p);
+        if choice == Some(&false) && view.series.is_some() {
+            view.series = None;
+            view.kind = "Table";
+        }
+        if self.detail.as_ref().is_some_and(|d| d.native.is_some()) {
+            for row in &mut view.rows {
+                row.evidence = Some(0);
+            }
+        }
+        view
+    }
+
+    fn answer_presentation(&self) -> Option<(String, Presentation)> {
+        let answer = self.current_answer()?;
+        // A malformed composition must not hide any of the fallback text.
+        let sections = answer.sections().ok()?;
+        if !sections.is_empty() && !answer.needs_input && answer.input_request.is_none() {
+            let section = sections.get(self.section_index())?;
+            return section
+                .presentation
+                .clone()
+                .map(|p| (section.id.clone(), p));
+        }
+        let named = answer.presentation().ok()?;
+        named
+            .or_else(|| {
+                (!answer.needs_input && answer.input_request.is_none())
                     .then(|| crate::content::detect(&answer.text, answer.sources.len()))
                     .flatten()
-            };
-            named.clone().ok().flatten().or_else(read).map(|p| {
-                let mut view = View::answer(p);
-                if self.detail.as_ref().is_some_and(|d| d.native.is_some()) {
-                    for row in &mut view.rows {
-                        row.evidence = Some(0);
-                    }
-                }
-                view
             })
+            .map(|p| (String::new(), p))
+    }
+
+    fn toggle_chart(&mut self) {
+        if let Some((id, p)) = self.answer_presentation()
+            && crate::content::chart(&p).is_some()
+        {
+            let chart = self.result_view().is_some_and(|v| v.series.is_some());
+            let (task, turn) = self.answer_key();
+            self.chart_choices.insert((task, turn, id), !chart);
+            self.status = Some(
+                if chart {
+                    "Table view"
+                } else {
+                    "Chart view · points follow the supplied row order"
+                }
+                .into(),
+            );
+            return;
+        }
+        self.status = Some("Chart unavailable: choose a table with one numeric column and consistent units, or a numeric series.".into());
+    }
+
+    fn result_view(&self) -> Option<View> {
+        if self.current_answer().is_some() {
+            self.answer_presentation()
+                .map(|(id, p)| self.chosen_view(p, &id))
         } else if self.current_turn().is_none() {
             let d = self.detail.as_ref()?;
             let report = d.tests.as_ref()?;
@@ -670,6 +760,14 @@ impl Workspace {
 
     fn inspect_result(&mut self) {
         let Some(view) = self.result_view() else {
+            if let Some(section) = self.answer_sections().get(self.section_index()) {
+                self.selection_detail = Some(section.text.clone());
+                self.source_filter = Some(section.sources.iter().map(|n| n - 1).collect());
+                self.panel = Some(Panel::Sources);
+                self.panel_scroll = 0;
+                self.item = 0;
+                self.expanded = self.items() == 1;
+            }
             return;
         };
         let Some(row) = view.rows.get(self.result_row) else {
@@ -1192,6 +1290,28 @@ impl Workspace {
                         Some("Select a fact, table row, chart point, or source first.".into());
                 }
             }
+            KeyCode::Left | KeyCode::Right
+                if question
+                    && self.panel.is_none()
+                    && !self.text_view
+                    && !self.answer_sections().is_empty() =>
+            {
+                let n = self.answer_sections().len();
+                let current = self.section_index();
+                let next = if key.code == KeyCode::Right {
+                    (current + 1) % n
+                } else {
+                    (current + n - 1) % n
+                };
+                self.section_focus.insert(self.answer_key(), next);
+                self.result_row = 0;
+                self.scroll = 0;
+                self.source_filter = None;
+                self.selection_detail = None;
+            }
+            KeyCode::Char('m') if question && self.panel.is_none() && !self.text_view => {
+                self.toggle_chart()
+            }
             KeyCode::Char('p')
                 if !question
                     && self.panel.is_none()
@@ -1658,8 +1778,20 @@ fn footer_keys(app: &Workspace) -> (Keys, Keys) {
         let stopped = app
             .current_turn()
             .is_some_and(|q| matches!(q.state, State::Stopped | State::Cancelled));
+        if !app.answer_sections().is_empty() && !app.text_view {
+            keys.push(("←→", "Section"));
+            if !viewing {
+                keys.push(("Enter", "Sources"));
+            }
+        }
         if viewing {
             keys.extend([("↑↓", "Select"), ("Enter", "Inspect")]);
+            if app
+                .answer_presentation()
+                .is_some_and(|(_, p)| crate::content::chart(&p).is_some())
+            {
+                keys.push(("m", "Table/chart"));
+            }
         } else {
             keys.push(("↑↓", "Scroll"));
         }
@@ -2235,7 +2367,9 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
         height: height.min(result.height),
         ..result
     };
-    if let Some(view) = &view {
+    if !app.text_view && !app.answer_sections().is_empty() {
+        draw_sections(f, result, app, focused, t);
+    } else if let Some(view) = &view {
         let height = result_view::height(view, result.width);
         result_view::draw(f, fit(height), view, app.result_row, focused, t);
     } else if app.current_answer().is_some() {
@@ -2290,6 +2424,105 @@ fn draw_question(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             ),
             composer,
         );
+    }
+}
+
+/// Stack bounded native cards. At small heights move the window to the focused card;
+/// the person can always scroll that card and reach every section with Left/Right.
+fn draw_sections(f: &mut Frame, area: Rect, app: &Workspace, focused: bool, t: &Theme) {
+    let sections = app.answer_sections();
+    let selected = app.section_index();
+    let [heading, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    f.render_widget(
+        Paragraph::new(line(
+            format!(
+                "Section {} / {} · ← → move · v original answer",
+                selected + 1,
+                sections.len()
+            ),
+            t.dim(),
+        )),
+        heading,
+    );
+    if body.height == 0 || body.width == 0 {
+        return;
+    }
+    let sources = &app.current_answer().unwrap().sources;
+    let views: Vec<_> = sections
+        .iter()
+        .map(|s| s.presentation.clone().map(|p| app.chosen_view(p, &s.id)))
+        .collect();
+    let texts: Vec<_> = sections
+        .iter()
+        .map(|s| document::lines(&s.text, document::inner_width(body.width), t, sources))
+        .collect();
+    let heights: Vec<u16> = views
+        .iter()
+        .zip(&texts)
+        .map(|(view, text)| {
+            view.as_ref()
+                .map(|v| result_view::height(v, body.width))
+                .unwrap_or_else(|| text.len().saturating_add(2).min(u16::MAX as usize) as u16)
+                .min(body.height)
+                .max(1)
+        })
+        .collect();
+    let mut first = 0;
+    while first < selected
+        && heights[first..=selected]
+            .iter()
+            .map(|h| *h as usize + 1)
+            .sum::<usize>()
+            .saturating_sub(1)
+            > body.height as usize
+    {
+        first += 1;
+    }
+    let mut y = body.y;
+    for i in first..sections.len() {
+        let remaining = body.bottom().saturating_sub(y);
+        if remaining == 0 {
+            break;
+        }
+        let rect = Rect::new(body.x, y, body.width, heights[i].min(remaining));
+        let active = i == selected;
+        if !active && rect.height < heights[i].min(5) {
+            f.render_widget(
+                Paragraph::new(line(
+                    format!("→ {} · next section", sections[i].title),
+                    t.dim(),
+                )),
+                rect,
+            );
+            break;
+        }
+        if let Some(view) = &views[i] {
+            result_view::draw(
+                f,
+                rect,
+                view,
+                if active { app.result_row } else { 0 },
+                active && focused,
+                t,
+            );
+            if active {
+                app.limits.set((0, app.limits.get().1));
+            }
+        } else {
+            let max = document::draw(
+                f,
+                rect,
+                texts[i].clone(),
+                if active { app.scroll } else { 0 },
+                &sections[i].title,
+                active && focused,
+                t,
+            );
+            if active {
+                app.limits.set((max, app.limits.get().1));
+            }
+        }
+        y = y.saturating_add(rect.height).saturating_add(1);
     }
 }
 
@@ -2547,6 +2780,9 @@ fn task_text(app: &Workspace, t: &Theme, width: u16) -> Vec<Line<'static>> {
         if let Err(why) = answer.presentation() {
             lines.extend(document::plain(why, width, t));
         }
+        if let Err(why) = answer.sections() {
+            lines.extend(document::plain(why, width, t));
+        }
         if app.text_view
             && let Ok(Some(p)) = answer.presentation()
         {
@@ -2722,7 +2958,7 @@ fn panel_tabs(app: &Workspace, panel: Panel, focused: bool, t: &Theme) -> Line<'
     }
     if d.question.is_some() {
         let sources = if app.source_filter.is_some() && focused {
-            "Sources · selected row".into()
+            "Sources · selection".into()
         } else {
             format!(
                 "Sources {}",
@@ -2982,7 +3218,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
             Panel::Turns => "No questions yet.".into(),
             Panel::Capabilities => "No operations available. Questions remain available with n. Register reports with conductor capability add.".into(),
             Panel::Sources if filter.is_some() => {
-                "No source attached to this row. s shows all answer sources.".into()
+                "No source attached to this selection. s shows all answer sources.".into()
             }
             Panel::Sources if app.working() && app.current_answer().is_none() => {
                 "Sources appear with the answer.".into()
@@ -3053,7 +3289,7 @@ pub fn demo_task() -> TaskDetail {
         kind: "Question".into(),
         state: State::Answered,
     };
-    let answer = Answer {text:"## Los Angeles, California\n\n24°C / 75°F · Clear\nFeels like 25°C / 77°F\n\nObserved 26 Sep 2026, 10:00 PDT [1]\n\nIllustrative demo data — not a current weather report.".into(),sources:vec![Citation {title:"Example weather provider".into(),url:"https://example.com/weather".into(),supports:"Temperature, conditions and observation time.".into(),observed_at:Some("26 Sep 2026, 10:00 PDT".into()),retrieved_at:Some("2026-09-26T17:02:00Z".into()),captured:Some("Demo response: temperature 24°C; clear; station Los Angeles.".into())}],needs_input:false, input_request:None, presentation:None};
+    let answer = Answer {text:"## Los Angeles, California\n\n24°C / 75°F · Clear\nFeels like 25°C / 77°F\n\nObserved 26 Sep 2026, 10:00 PDT [1]\n\nIllustrative demo data — not a current weather report.".into(),sources:vec![Citation {title:"Example weather provider".into(),url:"https://example.com/weather".into(),supports:"Temperature, conditions and observation time.".into(),observed_at:Some("26 Sep 2026, 10:00 PDT".into()),retrieved_at:Some("2026-09-26T17:02:00Z".into()),captured:Some("Demo response: temperature 24°C; clear; station Los Angeles.".into())}],needs_input:false, input_request:None, presentation:None, sections:None};
     let answer = answer.with_presentation(Presentation::Facts {
         title: "Los Angeles, California".into(),
         summary: "Observed 26 Sep 2026, 10:00 PDT · Example weather provider. Illustrative demo data — not a current weather report.".into(),
@@ -3168,6 +3404,7 @@ Illustrative demo text; not checked against a source."#
         needs_input: false,
         input_request: None,
         presentation: None,
+        sections: None,
     });
     detail
 }
@@ -3367,4 +3604,80 @@ pub fn demo_series() -> TaskDetail {
         points: [("06:00",17.,"Cooler start · light wind"),("09:00",21.,"Mild · sun rising"),("12:00",27.,"Warm · exposed routes feel hotter"),("15:00",29.,"Warmest sample period"),("18:00",24.,"Cooling into the evening")].into_iter().map(|(label,value,detail)| conductor_model::task::SeriesPoint { label: label.into(), value, detail: detail.into(), sources: vec![1] }).collect(),
     }));
     d
+}
+
+/// A composed answer whose entire provenance is explicitly fixture data.
+pub fn demo_composed() -> TaskDetail {
+    use conductor_model::task::AnswerSection;
+    let mut detail = demo_task();
+    detail.summary.id = "q-composed".into();
+    detail.summary.title = "How does this repository choose its default branch?".into();
+    detail.context = "Illustrative repository investigation".into();
+    let q = detail.question.as_mut().unwrap();
+    q.id = detail.summary.id.clone();
+    q.title = detail.summary.title.clone();
+    q.agent =
+        conductor_model::agent::AgentSelection::starting(conductor_model::agent::AgentKind::Codex);
+    let turn = &mut q.turns[0];
+    turn.question = q.title.clone();
+    turn.tokens = None;
+    turn.cost_usd = None;
+    turn.activity = vec![Activity {
+        at: turn.started_at.clone(),
+        actor: "Conductor".into(),
+        title: "Demo answer".into(),
+        detail: "Illustrative data. No runtime or command was executed.".into(),
+        failed: false,
+    }];
+    let sources = vec![
+        Citation {
+            title: "branch.py".into(),
+            url: "file:///demo/branch.py".into(),
+            supports: "Environment override and fallback order".into(),
+            ..Default::default()
+        },
+        Citation {
+            title: "config.json".into(),
+            url: "file:///demo/config.json".into(),
+            supports: "Default value is release".into(),
+            ..Default::default()
+        },
+    ];
+    let summary = "**DEFAULT_BRANCH wins.** If unset or empty, the fixture reads `default_branch` from `config.json`: **release**. [1][2]\n\nIllustrative demo data; no repository was inspected.";
+    let table = Presentation::Table {
+        title: "Relevant files".into(),
+        summary: "Two files determine the result.".into(),
+        columns: vec!["File".into(), "Role".into(), "Detail".into()],
+        rows: vec![
+            ResultRow {
+                cells: vec![
+                    "branch.py".into(),
+                    "Resolution logic".into(),
+                    "Environment, then config".into(),
+                ],
+                sources: vec![1],
+            },
+            ResultRow {
+                cells: vec![
+                    "config.json".into(),
+                    "Fallback".into(),
+                    "default_branch = release".into(),
+                ],
+                sources: vec![2],
+            },
+        ],
+    };
+    let diagram = "```mermaid\nflowchart TD\n A[DEFAULT_BRANCH] -->|unset or empty| B[config.json]\n B --> C[release]\n```";
+    turn.answer = Some(Answer {
+        text: format!(
+            "{summary}\n\n| File | Role |\n|---|---|\n| branch.py | Environment, then config [1] |\n| config.json | Fallback: release [2] |\n\n{diagram}"
+        ),
+        sources,
+        ..Default::default()
+    }.with_sections(vec![
+        AnswerSection { id:"summary".into(),title:"Finding".into(),text:summary.into(),sources:vec![1,2],presentation:None },
+        AnswerSection { id:"files".into(),title:"Relevant files".into(),text:"branch.py selects the branch [1]. config.json provides release [2].".into(),sources:vec![1,2],presentation:Some(table) },
+        AnswerSection { id:"flow".into(),title:"Fallback order".into(),text:diagram.into(),sources:vec![1,2],presentation:None }
+    ]));
+    detail
 }

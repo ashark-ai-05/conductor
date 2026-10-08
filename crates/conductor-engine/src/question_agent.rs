@@ -10,6 +10,8 @@ pub fn program(kind: AgentKind) -> String {
         AgentKind::Pi => ("CONDUCTOR_PI_BIN", "pi"),
         AgentKind::Copilot => ("CONDUCTOR_COPILOT_BIN", "copilot"),
         AgentKind::Amp => ("CONDUCTOR_AMP_BIN", "amp"),
+        AgentKind::Codex => ("CONDUCTOR_CODEX_BIN", "codex"),
+        AgentKind::Hermes => ("CONDUCTOR_HERMES_BIN", "hermes"),
     };
     std::env::var(key).unwrap_or_else(|_| fallback.into())
 }

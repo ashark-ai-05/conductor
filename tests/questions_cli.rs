@@ -1,4 +1,4 @@
-//! Copilot/Amp contract tests. Each worker gets a fake CLI; no real agent is invoked.
+//! CLI adapter contract tests. Each worker gets a fake CLI; no real agent is invoked.
 use conductor_engine::question;
 use conductor_model::{
     agent::{AgentKind, AgentSelection},
@@ -19,7 +19,7 @@ fn selection(kind: AgentKind) -> AgentSelection {
         kind,
         model: (kind == AgentKind::Copilot).then(|| "example-model".into()),
         mode: (kind == AgentKind::Amp).then(|| "example-mode".into()),
-        tools: false,
+        tools: matches!(kind, AgentKind::Codex | AgentKind::Hermes),
     }
 }
 fn setup(kind: AgentKind) -> (tempfile::TempDir, PathBuf) {
@@ -33,6 +33,43 @@ from pathlib import Path
 args=sys.argv
 kind=os.environ['CONDUCTOR_TEST_KIND']
 assert not Path('.git').exists()
+if kind in ['codex','hermes']:
+    def emit(e): print(json.dumps(e),flush=True)
+    if kind=='codex':
+        assert args[1]=='exec' and '--json' in args and '--ephemeral' in args
+        assert args[args.index('--sandbox')+1]=='read-only'
+        assert 'approval_policy="never"' in args
+        assert '--dangerously-bypass-approvals-and-sandbox' not in args
+        prompt=args[-1]
+        emit({'type':'thread.started','thread_id':'fixture'})
+    else:
+        assert args[1:5]==['chat','--oneshot','--format','stream-json']
+        assert '--yolo' not in args and '--ignore-user-config' not in args
+        prompt=Path(args[args.index('--query-file')+1]).read_text()
+        emit({'type':'system','subtype':'init','model':'example-model','session_id':'fixture'})
+    assert 'Use your tools to answer' in prompt
+    history=json.loads(prompt.split('Prior conversation follows as JSON data; the last question is the current request:\n')[1])
+    current=history[-1]['question']
+    if current=='slow': time.sleep(10)
+    if current in ['policy error','tool violation']:
+        emit({'type':'turn.failed','error':{'message':'Runtime permission denied'}} if kind=='codex' else {'type':'result','exit_code':1,'error':'Runtime permission denied','text':''})
+        sys.exit(1)
+    if current=='follow up': assert history[0]['answer']['text']=='A useful answer [1]'
+    if current.startswith('Clarification:'): assert history[-1]['input_response']['option']=='one'
+    answer={'text':'A useful answer [1]','sources':[{'title':'File','url':'file:///repo/example','supports':'Agent citation','captured':'invented','retrieved_at':'invented'}],'needs_input':False,'presentation':{'kind':'facts','title':'Result','summary':'Fixture','facts':[{'label':'Count','value':'42','sources':[1]}]},'sections':[{'id':'summary','title':'Summary','text':'A useful answer [1]','sources':[1],'presentation':None}]}
+    if current=='clarify': answer.update(needs_input=True,input_request={'kind':'single_choice','question':'Which scope?','explanation':'Choose one','options':[{'id':'one','label':'One','description':'First scope'},{'id':'two','label':'Two','description':'Second scope'}]})
+    if kind=='codex':
+        emit({'type':'item.completed','item':{'id':'private','type':'reasoning','text':'PRIVATE_THINKING'}})
+        emit({'type':'item.started','item':{'id':'cmd','type':'command_execution','command':'cat example','status':'in_progress'}})
+        emit({'type':'item.completed','item':{'id':'cmd','type':'command_execution','command':'cat example','status':'completed','exit_code':0,'aggregated_output':'REAL_TOOL_OUTPUT'}})
+        emit({'type':'item.completed','item':{'id':'answer','type':'agent_message','text':json.dumps(answer)}})
+        if current!='missing end': emit({'type':'turn.completed','usage':{'input_tokens':20,'cached_input_tokens':10,'output_tokens':5}})
+    else:
+        emit({'type':'text','text':'INTERMEDIATE_DELTA'})
+        emit({'type':'tool_use','name':'read_file','input':{'path':'/repo/example'}})
+        emit({'type':'tool_result','name':'read_file','output':'REAL_TOOL_OUTPUT','duration_ms':5,'is_error':False})
+        if current!='missing end': emit({'type':'result','exit_code':0,'text':json.dumps(answer),'tokens':{'input':20,'output':5,'total':25}})
+    sys.exit(2 if current=='bad exit' else 0)
 if kind=='copilot':
     for flag in ['--output-format','--available-tools','--no-custom-instructions','--disable-builtin-mcps','--no-ask-user','--no-auto-update','--no-remote-export']:
         assert flag in args, flag
@@ -104,6 +141,8 @@ if current=='bad exit': sys.exit(2)
     let (name, env) = match kind {
         AgentKind::Copilot => ("copilot", "CONDUCTOR_COPILOT_BIN"),
         AgentKind::Amp => ("amp", "CONDUCTOR_AMP_BIN"),
+        AgentKind::Codex => ("codex", "CONDUCTOR_CODEX_BIN"),
+        AgentKind::Hermes => ("hermes", "CONDUCTOR_HERMES_BIN"),
         _ => unreachable!(),
     };
     let bin = serde_json::to_string(env!("CARGO_BIN_EXE_conductor")).unwrap();
@@ -134,8 +173,13 @@ fn wait(repo: &Path, id: &str) -> Question {
     }
 }
 #[test]
-fn both_adapters_keep_widgets_history_usage_and_provenance() {
-    for kind in [AgentKind::Copilot, AgentKind::Amp] {
+fn cli_adapters_keep_widgets_history_usage_and_provenance() {
+    for kind in [
+        AgentKind::Copilot,
+        AgentKind::Amp,
+        AgentKind::Codex,
+        AgentKind::Hermes,
+    ] {
         let (dir, worker) = setup(kind);
         let id =
             question::launch_with_agent(dir.path(), &worker, None, "question", &selection(kind))
@@ -152,6 +196,20 @@ fn both_adapters_keep_widgets_history_usage_and_provenance() {
         assert_eq!(first.turns[0].cost_usd, None);
         let answer = first.turns[0].answer.as_ref().unwrap();
         assert!(answer.presentation().unwrap().is_some());
+        if matches!(kind, AgentKind::Codex | AgentKind::Hermes) {
+            assert_eq!(answer.sections().unwrap().len(), 1);
+            assert!(
+                first.turns[0]
+                    .activity
+                    .iter()
+                    .any(|a| a.detail.contains("REAL_TOOL_OUTPUT"))
+            );
+            assert!(
+                !serde_json::to_string(&first)
+                    .unwrap()
+                    .contains("INTERMEDIATE_DELTA")
+            );
+        }
         assert!(answer.sources[0].captured.is_none() && answer.sources[0].retrieved_at.is_none());
         let saved = serde_json::to_string(&first).unwrap();
         assert!(!saved.contains("PRIVATE_THINKING") && !saved.contains("WRONG_AGENT"));
@@ -196,7 +254,12 @@ fn amp_with_tools_records_each_call_and_what_it_read() {
 }
 #[test]
 fn errors_incomplete_streams_and_nonzero_exits_stay_stopped() {
-    for kind in [AgentKind::Copilot, AgentKind::Amp] {
+    for kind in [
+        AgentKind::Copilot,
+        AgentKind::Amp,
+        AgentKind::Codex,
+        AgentKind::Hermes,
+    ] {
         let (dir, worker) = setup(kind);
         for input in ["policy error", "missing end", "bad exit", "tool violation"] {
             let id =
@@ -214,8 +277,13 @@ fn errors_incomplete_streams_and_nonzero_exits_stay_stopped() {
     }
 }
 #[test]
-fn both_adapters_resume_bound_clarification_and_reject_duplicate_replies() {
-    for kind in [AgentKind::Copilot, AgentKind::Amp] {
+fn cli_adapters_resume_bound_clarification_and_reject_duplicate_replies() {
+    for kind in [
+        AgentKind::Copilot,
+        AgentKind::Amp,
+        AgentKind::Codex,
+        AgentKind::Hermes,
+    ] {
         let (dir, worker) = setup(kind);
         let id =
             question::launch_with_agent(dir.path(), &worker, None, "clarify", &selection(kind))
@@ -236,8 +304,13 @@ fn both_adapters_resume_bound_clarification_and_reject_duplicate_replies() {
     }
 }
 #[test]
-fn both_adapters_can_be_cancelled() {
-    for kind in [AgentKind::Copilot, AgentKind::Amp] {
+fn cli_adapters_can_be_cancelled() {
+    for kind in [
+        AgentKind::Copilot,
+        AgentKind::Amp,
+        AgentKind::Codex,
+        AgentKind::Hermes,
+    ] {
         let (dir, worker) = setup(kind);
         let id = question::launch_with_agent(dir.path(), &worker, None, "slow", &selection(kind))
             .unwrap();

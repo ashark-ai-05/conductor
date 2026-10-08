@@ -21,6 +21,9 @@ fn main() {
     if args.iter().any(|s| s == "series") {
         app.open("q-series");
     }
+    if args.iter().any(|s| s == "composed") {
+        app.open("q-composed");
+    }
     if args.iter().any(|s| s == "document") {
         app.open("q-document");
     }
@@ -54,6 +57,7 @@ fn main() {
             .map(|t| t.state)
             .unwrap_or(conductor_model::task::State::Stopped);
         app.turn = question.turns.len().saturating_sub(1);
+        detail.context = question.agent.scope();
         detail.question = Some(question);
         app.detail = Some(detail);
         app.demo = false;

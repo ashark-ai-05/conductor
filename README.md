@@ -9,7 +9,7 @@ evidence. Built in Rust. Runs standalone or inside [Herdr](https://github.com/he
 
 *Actual terminal renderer, illustrative demo data. No model calls. [Still view](docs/screenshots/workbench-series.png).*
 
-- **Useful results:** Markdown, formulae, diagrams, tables, charts, choices, diffs, and test reports.
+- **Useful results:** composed Markdown, diagrams, tables, charts, and facts; plus choices, diffs, and test reports.
 - **Context that stays:** follow-ups, saved answers, sources, and activity in one task.
 - **Recorded checks:** coding workflows produce receipts showing what passed, failed, or was not checked.
 - **Local tools:** inspect Git changes and render reports without a model call.
@@ -36,6 +36,8 @@ From your project directory, choose an authenticated CLI installed on `PATH`:
 conductor ui --ask                     # Claude, with web tools
 conductor ui --ask --agent copilot     # GitHub Copilot CLI
 conductor ui --ask --agent amp         # Amp, with its own tools
+conductor ui --ask --agent codex       # Codex, read-only local sandbox
+conductor ui --ask --agent hermes      # Hermes Agent, its configured tools
 conductor ui --ask --agent pi          # Pi
 conductor ui --tasks                   # Return to saved tasks
 ```
@@ -44,14 +46,16 @@ Try: **“Compare exponential backoff and fixed retries in a table.”**
 
 **F3** chooses an agent and model before starting; Amp uses a mode instead.
 **f** follows up, **s** opens sources, **a** opens activity, and **h** opens the
-source record or workflow receipt. **Ctrl+K** opens local actions.
+source record or workflow receipt. **←/→** moves between answer sections, **m** switches
+a numeric table/chart, and **v** shows the original answer. **Ctrl+K** opens local actions.
 
-**Early release:** Copilot, Amp, and Pi question adapters are experimental.
-Copilot and Pi have no tools or live sources. Amp starts with tools enabled under
-Amp's permission rules; use `--agent-tools off` to disable them. Conductor asks
-Amp to avoid changes but does not enforce read-only access. Coding workflows use
-Claude, scripts, and human review. Citations are not independently verified;
-workflow receipts cover the configured checks. [Adapter setup and limits →](docs/agent-workbench.md)
+**Early release:** Claude, Codex, Hermes, Amp, Copilot, and Pi are question runtimes;
+all except Claude are experimental adapters. Codex uses a read-only local sandbox;
+its MCP configuration still applies. Amp and Hermes use their own tool permissions:
+the read-only prompt is not a sandbox. Amp tools can be disabled with `--agent-tools off`.
+Copilot and Pi have no tools. Coding workflows still use Claude, scripts, and human review.
+Citations are not independently verified; workflow receipts cover configured checks.
+[Adapter setup, validation, and limits →](docs/agent-workbench.md)
 
 ## Inside Herdr
 

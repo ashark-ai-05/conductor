@@ -55,6 +55,20 @@ pub struct Answer {
     /// Optional, untrusted display data. Invalid/unknown shapes never prevent reading text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<serde_json::Value>,
+    /// A bounded, flat composition. Invalid sections leave the original answer readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerSection {
+    pub id: String,
+    pub title: String,
+    /// Complete Markdown fallback for this section, including its caveats.
+    pub text: String,
+    pub sources: Vec<usize>,
+    pub presentation: Option<Presentation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,6 +119,56 @@ pub struct ResultRow {
 }
 
 impl Answer {
+    pub fn with_sections(mut self, sections: Vec<AnswerSection>) -> Self {
+        self.sections = serde_json::to_value(sections).ok();
+        self
+    }
+    pub fn sections(&self) -> Result<Vec<AnswerSection>, &'static str> {
+        let Some(value) = self.sections.as_ref().filter(|v| !v.is_null()) else {
+            return Ok(vec![]);
+        };
+        let error = "Invalid answer sections. Showing the full answer.";
+        let sections: Vec<AnswerSection> =
+            serde_json::from_value(value.clone()).map_err(|_| error)?;
+        if sections.len() > 6 {
+            return Err(error);
+        }
+        let mut ids = std::collections::HashSet::new();
+        let mut length = 0;
+        for section in &sections {
+            length += section.text.len();
+            if section.id.is_empty()
+                || section.id.len() > 64
+                || !section
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-".contains(c))
+                || !ids.insert(&section.id)
+                || section.title.trim().is_empty()
+                || section.title.chars().count() > 160
+                || section.title.chars().any(char::is_control)
+                || section.text.trim().is_empty()
+                || length > 64_000
+                || section.sources.len() > 20
+                || section
+                    .sources
+                    .iter()
+                    .any(|n| *n == 0 || *n > self.sources.len())
+            {
+                return Err(error);
+            }
+            if let Some(view) = &section.presentation {
+                // Reuse the same bounds and citation checks as a standalone widget.
+                let answer = Self {
+                    sources: self.sources.clone(),
+                    ..Self::default()
+                }
+                .with_presentation(view.clone());
+                answer.presentation().map_err(|_| error)?;
+            }
+        }
+        Ok(sections)
+    }
     pub fn with_presentation(mut self, view: Presentation) -> Self {
         self.presentation = serde_json::to_value(view).ok();
         self
@@ -354,5 +418,35 @@ mod series_tests {
             assert!(answer.presentation().is_err());
             assert_eq!(answer.text, "Readable fallback");
         }
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn composition_is_flat_bounded_and_uses_this_answers_sources() {
+        let section = json!({"id":"summary","title":"Summary","text":"Readable [1]","sources":[1],"presentation":null});
+        let mut answer = Answer {
+            text: "Original".into(),
+            sources: vec![Citation::default()],
+            sections: Some(json!([section.clone()])),
+            ..Default::default()
+        };
+        assert_eq!(answer.sections().unwrap().len(), 1);
+        for bad in [
+            json!([section.clone(), section.clone()]),
+            json!([{"id":"bad","title":"Bad","text":"Text","sources":[2],"presentation":null}]),
+            json!([{"id":"bad","title":"Bad","text":"Text","sources":[],"presentation":{"kind":"execute","command":"ignored"}}]),
+            json!([{"id":"bad","title":"Bad","text":"Text","sources":[],"presentation":null,"action":"execute"}]),
+            json!([{"id":"bad","title":"Bad","text":"x".repeat(64_001),"sources":[],"presentation":null}]),
+        ] {
+            answer.sections = Some(bad);
+            assert!(answer.sections().is_err());
+            assert_eq!(answer.text, "Original");
+        }
+        let legacy: Answer = serde_json::from_value(json!({"text":"Old answer"})).unwrap();
+        assert!(legacy.sections().unwrap().is_empty());
     }
 }

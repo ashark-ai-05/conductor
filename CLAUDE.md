@@ -116,6 +116,17 @@ still have none. Existing check and review
 semantics remain unchanged. The design mockup includes later capabilities; do not
 claim all its adapters, handoffs, or replay controls are implemented.
 
+## Composed answers and additional agents, approved 2026-10-08
+
+Krunal approved the next widget work and requested Claude, Codex, Hermes and other
+agent support. This slice adds Codex and Hermes question adapters alongside the four
+existing runtimes, bounded composed answer sections sharing the source inspector,
+and explicit table/chart selection. Layout remains deterministic Rust code. Numeric
+tables no longer imply a time series. Follow-ups retain the task's selected runtime.
+The scope is per-task agent selection, not simultaneous delegation, agent handoffs,
+direct model APIs, new coding-stage executors, or arbitrary generated controls.
+See `docs/agent-workbench.md` for runtime permissions and live validation limits.
+
 ## Next, in order
 
 The task workspace scope approved by Krunal on 2026-09-26 supersedes the launch-tab

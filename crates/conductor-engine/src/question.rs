@@ -14,6 +14,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+struct SubmissionLock(fs::File);
+impl Drop for SubmissionLock {
+    fn drop(&mut self) {
+        // A concurrent process spawn can briefly inherit this open file description.
+        // Closing our descriptor alone would leave the flock held until that child execs.
+        let _ = self.0.unlock();
+    }
+}
+
 fn directory(repo: &Path, id: &str) -> io::Result<PathBuf> {
     if !id.starts_with("q-") || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(io::Error::other("invalid question id"));
@@ -127,6 +136,7 @@ fn launch_inner(
     submission
         .try_lock()
         .map_err(|_| "Another pane is submitting to this question. Try again.".to_owned())?;
+    let _submission = SubmissionLock(submission);
     let lock = dir.join("busy");
     // Remove only a reservation whose owner has exited.
     if let Ok(s) = fs::read_to_string(&lock)
@@ -277,7 +287,7 @@ fn prompt(q: &Question) -> String {
         Reuse meanings and preferences already established in this task. Ask only when missing information materially changes the answer. Do not mark a completed answer needs_input just because a follow-up would be useful.\n\
         For a needed clarification, set needs_input true and input_request to {{kind:single_choice, question, explanation, options:[{{id,label,description}}]}}. Supply 2-8 distinct relevant options with stable short ASCII ids. Conductor always adds a custom answer and optional context; do not add an Other option yourself.\n\
         Set input_request null for ordinary answers or questions that require free text. A clarification is a request for information, never permission to execute a tool or an operation. Keep text a readable fallback containing the question and options.\n\
-        Optionally add presentation: null, or a facts/table/series object. Keep text a complete standalone answer.\n\
+        Optionally add presentation: null, or a facts/table/series object. For an answer with distinct useful parts, use sections: up to 6 objects with stable id, title, text (complete Markdown for that section), sources (1-based references), and presentation (null or facts/table/series). For example: a short summary, a relevant-files table, then a diagram in a fenced mermaid Markdown section. Keep simple answers simple: use sections null unless composition helps. Never put a layout inside another layout. When sections are used, set the top-level presentation null. Keep text a complete standalone answer.\n\
         Use facts for a handful of values (weather), table for comparisons or forecasts. Use series for ordered numeric observations with a unit and source references for each point. Do not extract a chart from prose unless you have the actual values. Use null for prose or clarification.\n\
         Presentation title and summary must retain context, observation times, uncertainty and caveats. Use plain single-line strings.\n\
         Each fact/row has sources: an array of 1-based citation numbers; use [] when no citation supports it.\n\
@@ -307,7 +317,7 @@ fn prompt(q: &Question) -> String {
         .turns
         .iter()
         .map(|t| json!({"question":t.question,"input_response":t.input_response,"answer":t.answer.as_ref().map(|a| json!({
-            "text":a.text,"input_request":a.input_request,"presentation":a.presentation,"sources":a.sources.iter().map(|s| json!({"title":s.title,"url":s.url,"supports":s.supports,"observed_at":s.observed_at})).collect::<Vec<_>>()
+            "text":a.text,"input_request":a.input_request,"presentation":a.presentation,"sections":a.sections,"sources":a.sources.iter().map(|s| json!({"title":s.title,"url":s.url,"supports":s.supports,"observed_at":s.observed_at})).collect::<Vec<_>>()
         }))}))
         .collect();
     out.push_str(&serde_json::to_string(&history).unwrap_or_default());
@@ -342,6 +352,11 @@ fn schema() -> String {
         json!({"kind":{"type":"string","const":"series"},"title":string,"summary":string,"unit":string,"points":{"type":"array","items":point,"minItems":2,"maxItems":200}}),
         vec!["kind", "title", "summary", "unit", "points"],
     );
+    let section = object(
+        json!({"id":string,"title":string,"text":string,"sources":refs,
+            "presentation":{"anyOf":[{"type":"null"},facts,table,series]}}),
+        vec!["id", "title", "text", "sources", "presentation"],
+    );
     let choice = object(
         json!({"id":string,"label":string,"description":string}),
         vec!["id", "label", "description"],
@@ -351,14 +366,15 @@ fn schema() -> String {
         vec!["kind", "question", "explanation", "options"],
     );
     object(json!({
+        "sections":{"anyOf":[{"type":"null"},{"type":"array","items":section,"maxItems":6}]},
         "input_request":{"anyOf":[{"type":"null"},request]},
         "text":string,"needs_input":{"type":"boolean"},
         "presentation":{"anyOf":[{"type":"null"},facts,table,series]},
         "sources":{"type":"array","items":object(json!({"title":string,"url":string,"supports":string,"observed_at":{"type":["string","null"]}}), vec!["title","url","supports","observed_at"])}
-    }), vec!["text","needs_input","sources","presentation","input_request"]).to_string()
+    }), vec!["text","needs_input","sources","presentation","input_request","sections"]).to_string()
 }
 
-/// Execute in an empty directory, with only web tools. No repository context is supplied.
+/// Execute the selected runtime in an empty directory. Files must be named explicitly.
 pub fn work(repo: &Path, id: &str, turn: usize) -> io::Result<()> {
     let dir = directory(repo, id)?;
     let started = Instant::now();
@@ -438,7 +454,10 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
     if q.agent.kind == AgentKind::Pi {
         argv = crate::question_agent::pi_argv(&q.agent, brief.prompt.clone());
     }
-    if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+    if matches!(
+        q.agent.kind,
+        AgentKind::Copilot | AgentKind::Amp | AgentKind::Codex | AgentKind::Hermes
+    ) {
         argv = crate::question_cli::argv(&q.agent, brief.prompt.clone(), &scratch)?;
     }
     let environment = crate::question_cli::environment(q.agent.kind);
@@ -474,9 +493,14 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
                     });
                 }
                 changed
-            } else if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+            } else if matches!(
+                q.agent.kind,
+                AgentKind::Copilot | AgentKind::Amp | AgentKind::Codex | AgentKind::Hermes
+            ) {
                 // With tools on, each call and its result is recorded as it happens.
-                let stepped = q.agent.tools && capture.feed(line, q.turns.last_mut().unwrap());
+                let stepped = q.agent.kind == AgentKind::Amp
+                    && q.agent.tools
+                    && capture.feed(line, q.turns.last_mut().unwrap());
                 let update = cli.feed(q.agent.kind, line);
                 tool_violation.set(cli.violation);
                 if let Some(update) = update {
@@ -512,7 +536,10 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
             pi.tokens,
             pi.cost_usd,
         )
-    } else if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+    } else if matches!(
+        q.agent.kind,
+        AgentKind::Copilot | AgentKind::Amp | AgentKind::Codex | AgentKind::Hermes
+    ) {
         (
             parse_answer(&cli.text),
             cli.finished && cli.error.is_none(),
@@ -657,7 +684,7 @@ impl Capture {
                     title: match name.as_str() {
                         "WebSearch" | "web_search" => "Searching the web".into(),
                         "WebFetch" | "read_web_page" => "Retrieving a source".into(),
-                        "Read" | "look_at" => "Reading a file".into(),
+                        "Read" | "read" | "look_at" => "Reading a file".into(),
                         "Grep" | "glob" | "finder" => "Searching files".into(),
                         "Bash" => "Running a command".into(),
                         _ => format!("Using {name}"),
@@ -696,9 +723,12 @@ impl Capture {
                         .insert(url.into(), (at.clone(), detail.clone()));
                 }
                 // A file the agent read is a source too, cited as a file:// address.
-                if name == "Read"
+                if matches!(name.as_str(), "Read" | "read")
                     && !failed
-                    && let Some(path) = input["path"].as_str()
+                    && let Some(path) = input["path"]
+                        .as_str()
+                        .or(input["file_path"].as_str())
+                        .filter(|p| std::path::Path::new(p).is_absolute())
                 {
                     self.fetches
                         .insert(format!("file://{path}"), (at.clone(), detail.clone()));
@@ -714,5 +744,24 @@ impl Capture {
             }
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    #[test]
+    fn submission_releases_lock_even_if_a_spawn_inherits_the_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("submission.lock");
+        let file = fs::File::create(&path).unwrap();
+        file.try_lock().unwrap();
+        let inherited = file.try_clone().unwrap();
+        let guard = SubmissionLock(file);
+        let contender = OpenOptions::new().write(true).open(path).unwrap();
+        assert!(contender.try_lock().is_err());
+        drop(guard);
+        contender.try_lock().unwrap();
+        drop(inherited);
     }
 }

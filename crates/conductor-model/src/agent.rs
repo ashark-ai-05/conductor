@@ -9,17 +9,28 @@ pub enum AgentKind {
     Pi,
     Copilot,
     Amp,
+    Codex,
+    Hermes,
 }
 
 impl AgentKind {
-    pub const ALL: [Self; 4] = [Self::Claude, Self::Pi, Self::Copilot, Self::Amp];
+    pub const ALL: [Self; 6] = [
+        Self::Claude,
+        Self::Pi,
+        Self::Copilot,
+        Self::Amp,
+        Self::Codex,
+        Self::Hermes,
+    ];
     pub fn parse(value: &str) -> Result<Self, &'static str> {
         match value {
             "claude" => Ok(Self::Claude),
             "pi" => Ok(Self::Pi),
             "copilot" => Ok(Self::Copilot),
             "amp" => Ok(Self::Amp),
-            _ => Err("Supported question agents: claude, pi, copilot, amp"),
+            "codex" => Ok(Self::Codex),
+            "hermes" => Ok(Self::Hermes),
+            _ => Err("Supported question agents: claude, pi, copilot, amp, codex, hermes"),
         }
     }
     pub fn label(self) -> &'static str {
@@ -28,11 +39,17 @@ impl AgentKind {
             Self::Pi => "Pi",
             Self::Copilot => "GitHub Copilot",
             Self::Amp => "Amp",
+            Self::Codex => "Codex",
+            Self::Hermes => "Hermes Agent",
         }
     }
     pub fn scope(self) -> &'static str {
         match self {
             Self::Claude => "Web tools · No project files supplied",
+            Self::Codex => {
+                "Read-only local sandbox · Runtime MCP rules · No project files supplied"
+            }
+            Self::Hermes => "Hermes tools and permission rules · No project files supplied",
             Self::Pi | Self::Copilot | Self::Amp => {
                 "No tools · No live sources · No project files supplied"
             }
@@ -51,18 +68,18 @@ pub struct AgentSelection {
     /// Amp mode; Amp controls the model routing behind it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    /// Whether the runtime's own tools are switched on for this question. Amp only today;
+    /// Whether the runtime's own tools are switched on for this question;
     /// a saved question without this field ran with no tools.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tools: bool,
 }
 
 impl AgentSelection {
-    /// A new selection of `kind` as the UI and CLI start it: Amp with its tools on.
+    /// Defaults reflect the capabilities of each CLI adapter.
     pub fn starting(kind: AgentKind) -> Self {
         Self {
             kind,
-            tools: kind == AgentKind::Amp,
+            tools: matches!(kind, AgentKind::Amp | AgentKind::Codex | AgentKind::Hermes),
             ..Default::default()
         }
     }
@@ -75,8 +92,18 @@ impl AgentSelection {
         }
     }
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.tools && self.kind != AgentKind::Amp {
-            return Err("Tools can be switched on only for Amp in this version.");
+        if self.tools
+            && !matches!(
+                self.kind,
+                AgentKind::Amp | AgentKind::Codex | AgentKind::Hermes
+            )
+        {
+            return Err("Runtime tools are supported for Amp, Codex and Hermes.");
+        }
+        if !self.tools && matches!(self.kind, AgentKind::Codex | AgentKind::Hermes) {
+            return Err(
+                "Codex and Hermes use runtime tools. This adapter does not offer a no-tools mode.",
+            );
         }
         if self.kind == AgentKind::Amp && self.model.is_some() {
             return Err(
@@ -183,7 +210,7 @@ mod tests {
             bad.mode = Some(mode.into());
             assert!(bad.validate().is_err());
         }
-        for name in ["claude", "pi", "copilot", "amp"] {
+        for name in ["claude", "pi", "copilot", "amp", "codex", "hermes"] {
             assert!(AgentKind::parse(name).is_ok());
         }
     }

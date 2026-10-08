@@ -1322,3 +1322,148 @@ fn a_very_wide_screen_is_used_edge_to_edge() {
         .unwrap();
     assert!(edge > 290, "the side pane reaches the right edge");
 }
+
+fn composed_workspace() -> Workspace {
+    let mut app = Workspace::demo();
+    let answer = app
+        .detail
+        .as_mut()
+        .unwrap()
+        .question
+        .as_mut()
+        .unwrap()
+        .turns[0]
+        .answer
+        .as_mut()
+        .unwrap();
+    answer.presentation = None;
+    answer.text = "Complete original answer with all caveats".into();
+    answer.sections = Some(serde_json::json!([
+        {"id":"summary","title":"Finding","text":"The default comes from configuration [1].","sources":[1],"presentation":null},
+        {"id":"files","title":"Files","text":"A: 1 ms; B: 2 ms; C: 3 ms [1].","sources":[1],"presentation":{"kind":"table","title":"Relevant files","summary":"Illustrative measurements","columns":["File","Time"],"rows":[{"cells":["A","1 ms"],"sources":[1]},{"cells":["B","2 ms"],"sources":[1]},{"cells":["C","3 ms"],"sources":[1]}]}},
+        {"id":"flow","title":"Resolution order","text":"```mermaid\nflowchart LR\n A[Config] --> B[Default]\n```","sources":[],"presentation":null}
+    ]));
+    app
+}
+
+#[test]
+fn composed_cards_share_inspection_and_keep_their_view_choice() {
+    let mut app = composed_workspace();
+    let view = render(&app, 150, 48);
+    assert!(
+        view.contains("Finding")
+            && view.contains("Relevant files")
+            && view.contains("Resolution order"),
+        "{view}"
+    );
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.source_filter, Some(vec![0]));
+    assert!(app.selection_detail.as_ref().unwrap().contains("B"));
+    press(&mut app, KeyCode::Esc);
+    // Escape collapses the single-source inspector before closing it.
+    if app.panel.is_some() {
+        press(&mut app, KeyCode::Esc);
+    }
+    press(&mut app, KeyCode::Char('m'));
+    assert!(render(&app, 150, 48).contains("Series"));
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Left);
+    assert!(render(&app, 150, 48).contains("Series"));
+    press(&mut app, KeyCode::Char('v'));
+    assert!(render(&app, 80, 30).contains("Complete original answer"));
+    press(&mut app, KeyCode::Char('v'));
+    assert!(render(&app, 150, 48).contains("Series"));
+}
+
+#[test]
+fn every_section_is_reachable_at_split_pane_sizes_and_bad_sections_fall_back() {
+    let mut app = composed_workspace();
+    for width in [1, 20, 70, 100, 150] {
+        for height in [1, 5, 16, 40] {
+            for _ in 0..3 {
+                render(&app, width, height);
+                press(&mut app, KeyCode::Right);
+            }
+        }
+    }
+    press(&mut app, KeyCode::Left);
+    assert!(render(&app, 70, 22).contains("Resolution order"));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.source_filter, Some(vec![]));
+    app.panel = None;
+    let answer = app
+        .detail
+        .as_mut()
+        .unwrap()
+        .question
+        .as_mut()
+        .unwrap()
+        .turns[0]
+        .answer
+        .as_mut()
+        .unwrap();
+    answer.sections.as_mut().unwrap()[0]["sources"] = serde_json::json!([99]);
+    let output = render(&app, 80, 30);
+    assert!(
+        output.contains("Invalid answer sections") && output.contains("Complete original answer")
+    );
+}
+
+#[test]
+fn picker_selects_codex_and_hermes_without_losing_the_draft() {
+    use conductor_model::agent::{AgentKind, AgentSelection};
+    let mut app = Workspace::demo();
+    press(&mut app, KeyCode::Char('n'));
+    app.paste("Inspect the repository");
+    app.agent = AgentSelection::starting(AgentKind::Amp);
+    for kind in [AgentKind::Codex, AgentKind::Hermes] {
+        press(&mut app, KeyCode::F(3));
+        press(&mut app, KeyCode::Down);
+        assert!(render(&app, 70, 24).contains(kind.label()));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.agent.kind, kind);
+        assert!(app.agent.tools);
+        assert_eq!(app.text, "Inspect the repository");
+    }
+}
+
+#[test]
+fn table_and_section_preferences_do_not_leak_between_answers() {
+    let mut app = composed_workspace();
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Char('m'));
+    let q = app.detail.as_mut().unwrap().question.as_mut().unwrap();
+    let mut next = q.turns[0].clone();
+    next.question = "A different answer".into();
+    q.turns.push(next);
+    press(&mut app, KeyCode::Char(']'));
+    let output = render(&app, 150, 48);
+    assert!(output.contains("Section 1 / 3"));
+    assert!(!output.contains("Series"));
+    press(&mut app, KeyCode::Char('['));
+    let output = render(&app, 150, 48);
+    assert!(output.contains("Section 2 / 3") && output.contains("Series"));
+}
+
+#[test]
+fn table_height_includes_wrapped_cells_and_the_last_row() {
+    let mut app = Workspace::demo();
+    let a = app
+        .detail
+        .as_mut()
+        .unwrap()
+        .question
+        .as_mut()
+        .unwrap()
+        .turns[0]
+        .answer
+        .as_mut()
+        .unwrap();
+    a.presentation = Some(
+        serde_json::json!({"kind":"table","title":"Files","summary":"Two relevant files","columns":["File","Role","Detail"],"rows":[{"cells":["branch.py","Logic","Checks DEFAULT_BRANCH, then reads the sibling config.json file."],"sources":[1]},{"cells":["config.json","Fallback","default_branch = release"],"sources":[1]}]}),
+    );
+    let output = render(&app, 150, 40);
+    assert!(output.contains("default_branch = release"), "{output}");
+}

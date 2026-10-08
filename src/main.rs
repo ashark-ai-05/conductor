@@ -42,7 +42,7 @@ usage:
                                      show a run's stages, attempts and checks as a
                                      trace; --export sends it over OTLP
   conductor ui [--run <id> | --ask | --tasks] [--repo <path>] [--demo] [--light]
-               [--agent claude|pi|copilot|amp] [--model <id>] [--agent-mode <mode>] [--agent-tools on|off]
+               [--agent claude|pi|copilot|amp|codex|hermes] [--model <id>] [--agent-mode <mode>] [--agent-tools on|off]
                                      ask a question or inspect a task with its result,
                                      sources, evidence and activity
   conductor capability list         discover native operations (no agent calls)
@@ -836,7 +836,7 @@ fn ui(args: &[String]) -> Result<ExitCode> {
             "--agent" => {
                 agent.kind = conductor_model::agent::AgentKind::parse(
                     it.next()
-                        .context("--agent needs claude, pi, copilot, or amp")?,
+                        .context("--agent needs claude, pi, copilot, amp, codex, or hermes")?,
                 )
                 .map_err(anyhow::Error::msg)?
             }

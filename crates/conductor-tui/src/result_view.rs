@@ -155,7 +155,11 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bo
         draw_facts(f, area, view, selected, focused, t);
         return;
     }
-    let block = crate::workspace::pane(t, view.kind, focused);
+    let block = crate::workspace::pane(t, view.kind, focused).title_bottom(format!(
+        " {} / {} rows ",
+        selected.min(view.rows.len().saturating_sub(1)) + usize::from(!view.rows.is_empty()),
+        view.rows.len()
+    ));
     let inner = block.inner(area);
     f.render_widget(block, area);
     let area = inner;
@@ -194,20 +198,7 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bo
         );
         return;
     }
-    let mut widths: Vec<u16> = view
-        .columns
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let widest = view
-                .rows
-                .iter()
-                .map(|r| Line::raw(clean(&r.cells[i])).width())
-                .max()
-                .unwrap_or(0);
-            (widest.max(c.len()).min(36) as u16).max(8)
-        })
-        .collect();
+    let mut widths = column_widths(view);
     let refs = view.kind != "Test report";
     let source_width = 10;
     let needed = widths.iter().sum::<u16>()
@@ -288,7 +279,7 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bo
         } else {
             t.text()
         })
-        .highlight_symbol("▎ ");
+        .highlight_symbol(if focused { "▎ " } else { "  " });
     let mut state = TableState::default().with_selected(selected);
     f.render_stateful_widget(
         table,
@@ -298,6 +289,22 @@ pub fn draw(f: &mut Frame, area: Rect, view: &View, selected: usize, focused: bo
         },
         &mut state,
     );
+}
+
+fn column_widths(view: &View) -> Vec<u16> {
+    view.columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let widest = view
+                .rows
+                .iter()
+                .map(|r| Line::raw(clean(&r.cells[i])).width())
+                .max()
+                .unwrap_or(0);
+            (widest.max(c.len()).min(36) as u16).max(8)
+        })
+        .collect()
 }
 
 fn references(refs: &[usize]) -> String {
@@ -335,71 +342,63 @@ pub fn height(view: &View, width: u16) -> u16 {
     if view.kind == "Key facts" {
         return facts_height(view, width);
     }
+    let inner_width = width.saturating_sub(4).max(1);
     let summary = Paragraph::new(clean(&view.summary))
         .wrap(Wrap { trim: false })
-        .line_count(width.max(1))
+        .line_count(inner_width)
         .min(6) as u16;
-    if view.kind != "Key facts" {
-        let needed = view
-            .columns
+    let widths = column_widths(view);
+    let needed = widths.iter().map(|w| *w as usize).sum::<usize>()
+        + widths.len() * 2
+        + if view.kind == "Test report" { 2 } else { 14 };
+    if needed > inner_width as usize {
+        let fields = view
+            .rows
             .iter()
-            .enumerate()
-            .map(|(i, label)| {
-                view.rows
+            .map(|row| {
+                view.columns
                     .iter()
-                    .filter_map(|r| r.cells.get(i))
-                    .map(|s| Line::raw(clean(s)).width())
-                    .max()
-                    .unwrap_or(0)
-                    .max(label.len())
-                    .clamp(8, 36)
+                    .zip(&row.cells)
+                    .map(|(label, value)| {
+                        crate::document::wrap(
+                            &[ratatui::text::Span::raw(format!("{label}: {value}"))],
+                            inner_width,
+                            "",
+                            "  ",
+                            true,
+                        )
+                        .len()
+                            + 1
+                    })
+                    .sum::<usize>()
             })
-            .sum::<usize>()
-            + view.columns.len() * 2
-            + 14;
-        if needed > width as usize {
-            let fields = view
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    view.rows
-                        .iter()
-                        .filter_map(|r| r.cells.get(i))
-                        .map(|s| {
-                            Paragraph::new(clean(s))
-                                .wrap(Wrap { trim: false })
-                                .line_count(width.max(1))
-                        })
-                        .max()
-                        .unwrap_or(1)
-                        + 2
-                })
-                .sum::<usize>();
-            return summary
-                .saturating_add(8)
-                .saturating_add(fields.min(u16::MAX as usize) as u16);
-        }
+            .max()
+            .unwrap_or(1);
+        return summary
+            .saturating_add(8)
+            .saturating_add(fields.min(u16::MAX as usize) as u16);
     }
+    // Use the same column widths and wrapping as draw(), including source references.
     let rows = view
         .rows
         .iter()
-        .map(|r| {
-            let width = width.saturating_sub(25).max(1);
-            r.cells
+        .map(|row| {
+            let height = row
+                .cells
                 .iter()
-                .map(|s| {
-                    Paragraph::new(clean(s))
-                        .wrap(Wrap { trim: false })
-                        .line_count(width)
-                })
+                .zip(&widths)
+                .map(|(cell, width)| wrap(cell, *width).len())
                 .max()
-                .unwrap_or(1)
-                .saturating_add(1)
+                .unwrap_or(1);
+            height.max(if view.kind == "Test report" {
+                1
+            } else {
+                wrap(&references(&row.sources), 10).len()
+            }) + 1
         })
         .sum::<usize>()
         .min(u16::MAX as usize) as u16;
-    summary.saturating_add(rows).saturating_add(6)
+    summary.saturating_add(rows).saturating_add(7)
 }
 
 struct FactsLayout {
@@ -456,7 +455,11 @@ fn facts_layout(view: &View, width: u16, selected: usize, focused: bool, t: &The
         .map(|(i, row)| {
             let label = row.cells.first().map(String::as_str).unwrap_or("");
             let value = row.cells.get(1).map(String::as_str).unwrap_or("");
-            let marker = if i == selected { "▎ " } else { "  " };
+            let marker = if i == selected && focused {
+                "▎ "
+            } else {
+                "  "
+            };
             let refs = if row.sources.is_empty() {
                 String::new()
             } else {

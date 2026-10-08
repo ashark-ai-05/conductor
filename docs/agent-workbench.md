@@ -22,6 +22,8 @@ For real questions:
 target/release/conductor ui --ask
 target/release/conductor ui --ask --agent copilot
 target/release/conductor ui --ask --agent amp
+target/release/conductor ui --ask --agent codex
+target/release/conductor ui --ask --agent hermes
 target/release/conductor ui --ask --agent claude --model sonnet
 target/release/conductor ui --ask --agent pi --model <provider/model>
 ```
@@ -39,12 +41,65 @@ Amp mode is not a model ID. Conductor rejects `--agent amp --model ...`.
 
 Try: **"Compare exponential backoff and fixed retries in a table."** Then `f` to
 ask for an example, `a` for activity, or `h` for the source record. A pasted bug
-report can be discussed, but these adapters do not read the repository, edit code,
-or query Jira. Use Claude for current web questions in this version.
+report can be discussed. For repository investigation use Amp, Codex, or Hermes and
+name the absolute repository/file paths in the question. Conductor does not silently
+supply the current project. These question adapters ask the runtime to avoid changes;
+only Codex also enforces a read-only local sandbox. Jira access depends on the runtime's
+configured tools; there is no dedicated Jira executor.
 
 Inside Herdr, rebuild the same release binary used by the linked plugin, then open
 **Ask Conductor**. Conductor fills its assigned pane; Herdr retains the outer
 navigation. Existing workflow configuration chooses coding-stage agents separately.
+
+## Composed answers and runtime support (2026-10-08)
+
+One answer can contain up to six flat sections: Markdown (including existing code,
+formula and Mermaid rendering), facts, tables, or numeric series. The runtime supplies
+data; Rust validates it and controls card layout, keyboard focus and inspection.
+There is no extra model call to choose or redraw widgets. Invalid or unknown section
+data falls back to the complete answer text. The existing single-widget format and
+old saved answers remain readable.
+
+- `←/→`: focus a section. On short terminals the view moves to keep it reachable.
+- `↑/↓`: choose its row/point or scroll its document. `Enter`: inspect that selection's sources.
+- `m`: switch a compatible numeric table/series between table and chart. Automatic
+  Markdown detection keeps numeric tables as tables; a numeric column does not prove time order.
+- `v`: read the original complete answer; `s`, `a`, `h`: sources, activity, source record.
+- Section focus and display choices stay with that answer during the UI session.
+  They are not written into model history or retained across app restarts.
+
+Try **How does this repository choose its default branch?** in the demo task drawer.
+Its values are explicitly illustrative. Reproduce its actual terminal rendering with:
+
+```sh
+cargo run --release -p conductor-tui --example workspace -- 150 48 composed
+```
+
+![Composed repository investigation: finding, files, and diagram](screenshots/workbench-composed.png)
+
+[Split-pane view](screenshots/workbench-composed-narrow.png).
+
+For a real investigation, ask an authenticated runtime:
+
+> Read /absolute/path/to/repo. How is its default branch selected? Give me a summary,
+> a relevant-files table, and a diagram. Cite the files. Do not change anything.
+
+Codex follows the official [non-interactive event contract](https://learn.chatgpt.com/docs/non-interactive-mode).
+Hermes follows its [CLI JSONL contract](https://hermes-agent.nousresearch.com/docs/reference/cli-commands#--format-stream-json--structured-jsonl-output).
+Both require a successful terminal event and process exit. Tool events are Activity,
+not proof that generated claims are correct. Private reasoning and intermediate text
+deltas are not persisted as answers. Codex uses `--ephemeral`; both use Conductor's
+saved, bounded history on each follow-up, not a resumed provider session.
+
+Validation on 2026-10-08: a live Codex run with `--model gpt-5.5` read a disposable
+repository and returned three sections with command activity. This machine's configured
+default model was rejected by its account; select a model your own account supports.
+Amp's installed version was rejected as outdated (HTTP 426). A checksum-verified current
+CLI (0.0.1791460855-g1f688c), downloaded only into a temporary directory, reached the
+service but was stopped with “Out of Credits.” Successful live Amp tool execution
+remains unverified. Hermes is not installed here. Its adapter is tested with documented
+JSONL fixtures, including errors, incomplete streams, nonzero exits, cancellation and
+bound clarification replies. No runtime credentials, global settings, or policies were changed.
 
 ## Implemented views
 
@@ -101,7 +156,7 @@ model is called, and anything a rule cannot read stays as written; `v` shows the
 | LaTeX maths (`\[ … \]`, `$$ … $$`, `\( … \)`, `$ … $`) | A formula block in Unicode, one formula per line |
 | A fenced `mermaid` flowchart or sequence diagram | A drawn diagram; other Mermaid kinds show their source |
 | Fenced code | A code block labelled with its language |
-| One Markdown table with a short caption | The selectable table; a numeric column makes it a chart |
+| One Markdown table with a short caption | A selectable table; `m` explicitly switches a compatible numeric table to a chart |
 | Three or more `label: value` lines with a short caption | The key facts grid |
 | Anything else | A scrolling document |
 
@@ -127,7 +182,9 @@ model from a discovered list is not built.
 | Claude Code | Existing web question runner, model override, follow-ups, clarification, captures and activity | Authenticated Claude CLI required; existing safe-mode restrictions retained |
 | Pi (experimental) | One-shot JSON question runner, runtime model/provider selection, structured results, clarification and usage | Tools and discovered resources disabled; no live web lookup, repository editing, extension dialogs, or coding workflow stages |
 | GitHub Copilot (experimental) | JSONL question runner, model selection, structured results, clarification and usage | Copilot CLI access must be enabled for the account/organization; no tools or live sources; billing multiplier is not displayed as dollars |
-| Amp (experimental) | Streaming JSON question runner, optional Amp mode, structured results, clarification and usage. Tools on by default since 2026-10-02 (`--agent-tools off`, or `t` in the `F3` picker, switches them off): each tool call and result is a step, and a page or file Amp read is captured as the source | With tools on, Amp runs with the person's own Amp tools, MCP servers and permission rules; conductor does not limit them and never passes `--dangerously-allow-all`. The prompt asks it not to change files, which is a request, not a control. Not yet run against a live Amp: the tool events are parsed in the Claude-compatible shape the adapter already used. With tools off: no tools or live sources. IDE context disabled; no model ID override |
+| Amp (experimental) | Streaming JSON question runner, optional Amp mode, structured results, clarification and usage. Tools on by default since 2026-10-02 (`--agent-tools off`, or `t` in the `F3` picker, switches them off): each tool call and result is a step, and a page or file Amp read is captured as the source | With tools on, Amp runs with the person's own Amp tools, MCP servers and permission rules; conductor does not limit them and never passes `--dangerously-allow-all`. The prompt asks it not to change files, which is a request, not a control. Live attempts on 2026-10-08 were blocked first by an outdated installed version, then by account credits when tested with a temporary current CLI; tool execution is fixture-tested. With tools off: no tools or live sources. IDE context disabled; no model ID override |
+| Codex (experimental) | `codex exec --json`, model override, tool activity, composed results, clarification and usage | Read-only local sandbox and no approval escalation. Configured MCP tools retain their own permissions. Citations are not automatically matched to command output; inspect Activity. No coding-stage adapter |
+| Hermes Agent (experimental) | `hermes chat --oneshot --format stream-json`, configured provider/default model or model override, tool activity, composed results, clarification and usage | Requires Nous Research's Hermes Agent with JSONL support. Retains runtime tool permissions; no Conductor sandbox. Tool results may be truncated by Hermes and lack stable call IDs, so citations remain unverified and unmatched. No live Hermes installation tested |
 | Native operations | Local Git/report captures and refresh | No model involved |
 
 The Pi adapter follows the documented [JSON event stream](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/json.md)
@@ -145,8 +202,9 @@ question or an Amp question with tools switched off. With Amp tools on, calls an
 results are recorded as activity. User and organization runtime policies still apply.
 
 Credentials remain with the selected CLI. For testing or an alternate executable,
-`CONDUCTOR_CLAUDE_BIN`, `CONDUCTOR_PI_BIN`, `CONDUCTOR_COPILOT_BIN`, and
-`CONDUCTOR_AMP_BIN` override the respective program. Copilot/Amp may also save their
+`CONDUCTOR_CLAUDE_BIN`, `CONDUCTOR_PI_BIN`, `CONDUCTOR_COPILOT_BIN`,
+`CONDUCTOR_AMP_BIN`, `CONDUCTOR_CODEX_BIN`, and `CONDUCTOR_HERMES_BIN` override the
+respective program. Runtime CLIs may also save their
 own sessions under their runtime's storage and retention settings.
 Question turns run in an empty temporary directory. Conductor stores history and
 re-supplies it on each turn; it does not claim to resume a runtime's hidden state.
@@ -230,7 +288,7 @@ It measures 100 frames after warmup through Ratatui's test backend. It excludes
 terminal I/O, task loading, and agent execution. The design's end-to-end latency
 targets remain unverified. Idle demo frames no longer redraw continuously.
 
-Not implemented in this slice: Codex/ACP adapters, direct model API execution,
-Pi/Copilot tool execution, Pi/Copilot/Amp coding stages, Pi RPC interaction,
-cross-agent handoff, arbitrary generated UI, multi-artifact composition, production
+Not implemented in this slice: ACP adapters, direct model API execution,
+Pi/Copilot tool execution, Pi/Copilot/Amp/Codex/Hermes coding stages, Pi RPC interaction,
+cross-agent handoff, arbitrary generated UI, production
 replay, mouse controls, and new Jira/QA/ops executors.
