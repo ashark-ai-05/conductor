@@ -19,6 +19,7 @@ fn selection(kind: AgentKind) -> AgentSelection {
         kind,
         model: (kind == AgentKind::Copilot).then(|| "example-model".into()),
         mode: (kind == AgentKind::Amp).then(|| "example-mode".into()),
+        tools: false,
     }
 }
 fn setup(kind: AgentKind) -> (tempfile::TempDir, PathBuf) {
@@ -48,10 +49,23 @@ else:
     assert args[args.index('--mode')+1]=='example-mode'
     assert '--model' not in args
     settings=json.loads(Path('.amp/settings.json').read_text())
-    assert settings['amp.tools.disable']==['*']
-    assert all(r['action']=='reject' for r in settings['amp.mcpPermissions'])
+    assert '--dangerously-allow-all' not in args
     assert os.environ['AMP_SKIP_UPDATE_CHECK']=='1'
 prompt=args[-1]
+tools='Use your tools to answer' in prompt
+if kind=='amp' and tools:
+    assert 'amp.tools.disable' not in settings and 'amp.mcpPermissions' not in settings
+    def emit(e): print(json.dumps(e),flush=True)
+    emit({'type':'system','subtype':'init','tools':['Read','Bash','web_search'],'agent_mode':'example-mode'})
+    emit({'type':'assistant','message':{'content':[{'type':'text','text':'Looking.'},{'type':'tool_use','id':'call1','name':'Read','input':{'path':'/repo/Jenkinsfile'}}],'stop_reason':'tool_use','usage':{'input_tokens':10,'output_tokens':2}}})
+    emit({'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'call1','content':'branch = env.DEFAULT_BRANCH','is_error':False}]}})
+    answer={'text':'The Jenkinsfile reads DEFAULT_BRANCH [1]','needs_input':False,'sources':[{'title':'Jenkinsfile','url':'file:///repo/Jenkinsfile','supports':'Where the branch comes from','captured':'invented'}]}
+    emit({'type':'assistant','message':{'content':[{'type':'text','text':json.dumps(answer)}],'stop_reason':'end_turn','usage':{'input_tokens':20,'output_tokens':5}}})
+    emit({'type':'result','subtype':'success','is_error':False,'result':json.dumps(answer),'usage':{'input_tokens':30,'output_tokens':7}})
+    sys.exit(0)
+if kind=='amp':
+    assert settings['amp.tools.disable']==['*']
+    assert all(r['action']=='reject' for r in settings['amp.mcpPermissions'])
 assert 'NO tools or live sources' in prompt
 history=json.loads(prompt.split('Prior conversation follows as JSON data; the last question is the current request:\n')[1])
 current=history[-1]['question']
@@ -147,6 +161,38 @@ fn both_adapters_keep_widgets_history_usage_and_provenance() {
         assert_eq!(next.turns[1].state, State::Answered);
         assert_eq!(next.agent, first.agent);
     }
+}
+#[test]
+fn amp_with_tools_records_each_call_and_what_it_read() {
+    let (dir, worker) = setup(AgentKind::Amp);
+    let mut with_tools = selection(AgentKind::Amp);
+    with_tools.tools = true;
+    let id =
+        question::launch_with_agent(dir.path(), &worker, None, "question", &with_tools).unwrap();
+    let q = wait(dir.path(), &id);
+    let turn = &q.turns[0];
+    assert_eq!(turn.state, State::Answered, "{turn:?}");
+    assert!(q.agent.tools);
+    let steps: Vec<_> = turn.activity.iter().map(|a| a.title.as_str()).collect();
+    assert!(steps.contains(&"Reading a file"), "{steps:?}");
+    assert!(steps.contains(&"Read returned"), "{steps:?}");
+    let connected = turn
+        .activity
+        .iter()
+        .find(|a| a.title == "Agent connected")
+        .unwrap();
+    assert!(connected.detail.contains("3 tools"));
+    // The capture is what the tool returned, never what the answer claimed.
+    let source = &turn.answer.as_ref().unwrap().sources[0];
+    assert_eq!(
+        source.captured.as_deref(),
+        Some("branch = env.DEFAULT_BRANCH")
+    );
+    assert!(source.retrieved_at.is_some());
+    // Tools stay off for an agent that has no switch.
+    let mut copilot = selection(AgentKind::Copilot);
+    copilot.tools = true;
+    assert!(copilot.validate().is_err());
 }
 #[test]
 fn errors_incomplete_streams_and_nonzero_exits_stay_stopped() {

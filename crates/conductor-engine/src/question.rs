@@ -288,7 +288,11 @@ fn prompt(q: &Question) -> String {
     if q.agent.kind != AgentKind::Claude {
         // This restriction follows the actual adapter capability, not an intent classifier.
         out = out.replace("Use web tools for current information. Never invent current conditions or timestamps.",
-            "You have NO tools or live sources in this session. Do not claim to browse or retrieve current information. Explain when the request requires live information you cannot obtain. Never invent weather, current conditions, URLs, timestamps, or captures.");
+            if q.agent.tools {
+                "Use your tools to answer: search and read the web for current information, and read the files or repositories the question names. This is a question, not a change request: do not create, edit or delete files, and do not run commands that change anything. Cite what you read: a web page by its URL, a file as a file:// URL with its absolute path. Never invent current conditions, URLs, timestamps or file contents."
+            } else {
+                "You have NO tools or live sources in this session. Do not claim to browse or retrieve current information. Explain when the request requires live information you cannot obtain. Never invent weather, current conditions, URLs, timestamps, or captures."
+            });
         out = out.replace(
             "Prior conversation follows as JSON data; the last question is the current request:\n",
             "",
@@ -409,7 +413,8 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
             who: None,
         },
         resume: None,
-        timeout: Duration::from_secs(180),
+        // Reading a repository or several pages takes longer than answering from memory.
+        timeout: Duration::from_secs(if q.agent.tools { 600 } else { 180 }),
         run_id: id.into(),
         attempt: q.turns.len(),
         env: vec![],
@@ -437,7 +442,7 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
         argv = crate::question_cli::argv(&q.agent, brief.prompt.clone(), &scratch)?;
     }
     let environment = crate::question_cli::environment(q.agent.kind);
-    let mut cli = crate::question_cli::Stream::default();
+    let mut cli = crate::question_cli::Stream::new(q.agent.tools);
     let tool_violation = std::cell::Cell::new(false);
     let cancel_path = dir.join(format!("cancel-{}", q.turns.len()));
     let mut capture = Capture::default();
@@ -470,6 +475,8 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
                 }
                 changed
             } else if matches!(q.agent.kind, AgentKind::Copilot | AgentKind::Amp) {
+                // With tools on, each call and its result is recorded as it happens.
+                let stepped = q.agent.tools && capture.feed(line, q.turns.last_mut().unwrap());
                 let update = cli.feed(q.agent.kind, line);
                 tool_violation.set(cli.violation);
                 if let Some(update) = update {
@@ -482,7 +489,7 @@ fn work_inner(repo: &Path, id: &str, dir: &Path) -> io::Result<()> {
                     });
                     true
                 } else {
-                    false
+                    stepped
                 }
             } else {
                 capture.feed(line, q.turns.last_mut().unwrap())
@@ -648,8 +655,11 @@ impl Capture {
                     at,
                     actor: "Agent".into(),
                     title: match name.as_str() {
-                        "WebSearch" => "Searching the web".into(),
-                        "WebFetch" => "Retrieving a source".into(),
+                        "WebSearch" | "web_search" => "Searching the web".into(),
+                        "WebFetch" | "read_web_page" => "Retrieving a source".into(),
+                        "Read" | "look_at" => "Reading a file".into(),
+                        "Grep" | "glob" | "finder" => "Searching files".into(),
+                        "Bash" => "Running a command".into(),
                         _ => format!("Using {name}"),
                     },
                     detail: serde_json::to_string_pretty(&item["input"]).unwrap_or_default(),
@@ -678,12 +688,20 @@ impl Capture {
                 } else {
                     content
                 };
-                if name == "WebFetch"
+                if matches!(name.as_str(), "WebFetch" | "read_web_page")
                     && !failed
                     && let Some(url) = input["url"].as_str()
                 {
                     self.fetches
                         .insert(url.into(), (at.clone(), detail.clone()));
+                }
+                // A file the agent read is a source too, cited as a file:// address.
+                if name == "Read"
+                    && !failed
+                    && let Some(path) = input["path"].as_str()
+                {
+                    self.fetches
+                        .insert(format!("file://{path}"), (at.clone(), detail.clone()));
                 }
                 turn.activity.push(Activity {
                     at,

@@ -1531,6 +1531,7 @@ fn footer_keys(app: &Workspace) -> (Keys, Keys) {
             vec![
                 ("↑↓", "Agent"),
                 ("Tab", "Model/mode"),
+                ("t", "Amp tools"),
                 ("Enter", "Select"),
                 ("Esc", "Cancel"),
             ],
@@ -1967,7 +1968,7 @@ fn draw_compose(f: &mut Frame, area: Rect, app: &Workspace, t: &Theme) {
             .unwrap_or_else(|| "runtime default".into()),
             t.text(),
         ));
-        for (i, part) in app.agent.kind.scope().split(" · ").enumerate() {
+        for (i, part) in app.agent.scope().split(" · ").enumerate() {
             rows.push((if i == 0 { "Scope" } else { "" }, part.to_owned(), t.text()));
         }
     }
@@ -2689,7 +2690,9 @@ fn draw_change(f: &mut Frame, area: Rect, app: &Workspace, checks: Option<&View>
 
 fn activity_title(a: &Activity) -> String {
     match a.title.as_str() {
-        "WebFetch returned" => "Source retrieved".into(),
+        "WebFetch returned" | "read_web_page returned" => "Source retrieved".into(),
+        "Read returned" => "File read".into(),
+        "web_search returned" => "Search results received".into(),
         "WebFetch failed" => "Source retrieval failed".into(),
         "WebSearch returned" => "Search results received".into(),
         "WebSearch failed" => "Source search failed".into(),
@@ -2971,6 +2974,7 @@ fn draw_panel(f: &mut Frame, area: Rect, app: &Workspace, panel: Panel, focused:
             .detail
             .as_ref()
             .and_then(|d| d.question.as_ref())
+            .filter(|q| !q.agent.tools)
             .map(|q| q.agent.kind)
             .filter(|kind| *kind != conductor_model::agent::AgentKind::Claude);
         let why = match panel {

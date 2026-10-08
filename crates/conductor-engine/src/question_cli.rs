@@ -1,4 +1,5 @@
-//! Copilot and Amp question adapters. Presentation is data; these sessions expose no tools.
+//! Copilot and Amp question adapters. Presentation is data. Copilot sessions expose no
+//! tools; Amp's are on only when the question's selection says so.
 use super::question_agent::program;
 use conductor_model::agent::{AgentKind, AgentSelection};
 use serde_json::{Value, json};
@@ -32,8 +33,12 @@ pub fn argv(selection: &AgentSelection, prompt: String, scratch: &Path) -> io::R
             // Only this unique scratch workspace is configured. Keep the user's authentication,
             // endpoint and corporate proxy configuration in place; never rewrite user settings.
             std::fs::create_dir(scratch.join(".amp"))?;
-            std::fs::write(
-                scratch.join(".amp/settings.json"),
+            // With tools on, Amp runs as the person has set it up: its tools, its MCP
+            // servers and its permission rules. Conductor never passes
+            // --dangerously-allow-all, so a command Amp would ask about is refused.
+            let settings = if selection.tools {
+                json!({"amp.updates.mode":"disabled"})
+            } else {
                 json!({
                     "amp.tools.disable": ["*"],
                     "amp.mcpPermissions": [
@@ -42,8 +47,8 @@ pub fn argv(selection: &AgentSelection, prompt: String, scratch: &Path) -> io::R
                     ],
                     "amp.updates.mode":"disabled"
                 })
-                .to_string(),
-            )?;
+            };
+            std::fs::write(scratch.join(".amp/settings.json"), settings.to_string())?;
             args.extend(
                 [
                     "--stream-json",
@@ -94,9 +99,17 @@ pub struct Stream {
     pub finished: bool,
     pub model: Option<String>,
     pub violation: bool,
+    /// Tools were switched on for this question, so tool calls are expected.
+    pub tools: bool,
     seen: HashSet<String>,
 }
 impl Stream {
+    pub fn new(tools: bool) -> Self {
+        Self {
+            tools,
+            ..Default::default()
+        }
+    }
     pub fn feed(&mut self, kind: AgentKind, line: &str) -> Option<Update> {
         let event: Value = serde_json::from_str(line).ok()?;
         if let Some(id) = event["id"].as_str()
@@ -137,8 +150,13 @@ impl Stream {
         self.update(
             "Response received",
             format!(
-                "Runtime reported: {}\nNo live sources captured.",
-                self.model.as_deref().unwrap_or("Unavailable")
+                "Runtime reported: {}\n{}",
+                self.model.as_deref().unwrap_or("Unavailable"),
+                if self.tools {
+                    "Tool calls and their results are listed as separate steps."
+                } else {
+                    "No live sources captured."
+                }
             ),
         )
     }
@@ -226,7 +244,8 @@ impl Stream {
     fn amp(&mut self, e: &Value) -> Option<Update> {
         match e["type"].as_str()? {
             "system" if e["subtype"] == "init" => {
-                if e["tools"].as_array().is_some_and(|a| !a.is_empty()) {
+                let tools = e["tools"].as_array().map_or(0, Vec::len);
+                if tools > 0 && !self.tools {
                     return self.unexpected_tools();
                 }
                 self.model = e["agent_mode"]
@@ -234,7 +253,13 @@ impl Stream {
                     .map(|mode| format!("Amp mode {mode}"));
                 self.update(
                     "Agent connected",
-                    "Amp question session started; no tools enabled.".into(),
+                    if self.tools {
+                        format!(
+                            "Amp question session started with {tools} tools, under Amp's own permission rules."
+                        )
+                    } else {
+                        "Amp question session started; no tools enabled.".into()
+                    },
                 )
             }
             "system"
@@ -252,10 +277,11 @@ impl Stream {
             "assistant" => {
                 let m = &e["message"];
                 let content = m["content"].as_array()?;
-                if content.iter().any(|b| b["type"] == "tool_use") {
+                let calling = content.iter().any(|b| b["type"] == "tool_use");
+                if calling && !self.tools {
                     return self.unexpected_tools();
                 }
-                self.text = content
+                let text = content
                     .iter()
                     .filter(|b| b["type"] == "text")
                     .filter_map(|b| b["text"].as_str())
@@ -266,9 +292,16 @@ impl Stream {
                 }
                 if let Some(reason) = m["stop_reason"].as_str()
                     && !matches!(reason, "end_turn" | "stop_sequence")
+                    && !(self.tools && reason == "tool_use")
                 {
                     return self.fail(format!("Amp did not finish normally: {reason}"));
                 }
+                // A message that only calls tools is a step, not the answer; the step is
+                // recorded from the same line by the tool capture.
+                if calling {
+                    return None;
+                }
+                self.text = text;
                 self.received()
             }
             "result" => {

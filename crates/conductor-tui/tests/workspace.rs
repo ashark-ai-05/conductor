@@ -1216,6 +1216,47 @@ fn the_text_decides_the_widget_when_the_agent_names_none() {
 }
 
 #[test]
+fn formula_after_a_diagram_renders_without_changing_literal_code() {
+    let mut app = Workspace::demo();
+    app.open("q-document");
+    let answer = app
+        .detail
+        .as_mut()
+        .unwrap()
+        .question
+        .as_mut()
+        .unwrap()
+        .turns[0]
+        .answer
+        .as_mut()
+        .unwrap();
+    answer.presentation = None;
+    answer.text = r"```mermaid
+flowchart TD
+A[Request] --> B[Reply]
+```
+
+\[d_n = \frac{a}{b}\]
+
+```text
+\frac{untouched}{code}
+```"
+    .into();
+    for width in [80, 140] {
+        let text = render(&app, width, 50);
+        assert!(
+            text.contains("Diagram") && text.contains("Request"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Formula") && text.contains("dₙ = a/b"),
+            "{text}"
+        );
+        assert!(text.contains(r"\frac{untouched}{code}"), "{text}");
+    }
+}
+
+#[test]
 fn a_long_answer_scrolls_to_its_end_and_stops_there() {
     let mut app = Workspace::demo();
     app.open("q-document");

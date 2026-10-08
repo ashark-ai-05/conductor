@@ -42,7 +42,7 @@ usage:
                                      show a run's stages, attempts and checks as a
                                      trace; --export sends it over OTLP
   conductor ui [--run <id> | --ask | --tasks] [--repo <path>] [--demo] [--light]
-               [--agent claude|pi|copilot|amp] [--model <id>] [--agent-mode <mode>]
+               [--agent claude|pi|copilot|amp] [--model <id>] [--agent-mode <mode>] [--agent-tools on|off]
                                      ask a question or inspect a task with its result,
                                      sources, evidence and activity
   conductor capability list         discover native operations (no agent calls)
@@ -827,6 +827,7 @@ fn ui(args: &[String]) -> Result<ExitCode> {
     let mut tasks = false;
     let mut repo = None;
     let mut agent = conductor_model::agent::AgentSelection::default();
+    let mut tools = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -842,6 +843,13 @@ fn ui(args: &[String]) -> Result<ExitCode> {
             "--model" => agent.model = Some(it.next().context("--model needs a model ID")?.clone()),
             "--agent-mode" => {
                 agent.mode = Some(it.next().context("--agent-mode needs an Amp mode")?.clone())
+            }
+            "--agent-tools" => {
+                tools = Some(match it.next().map(String::as_str) {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => bail!("--agent-tools needs on or off"),
+                })
             }
             "--tasks" => tasks = true,
             "--repo" => repo = Some(PathBuf::from(it.next().context("--repo needs a path")?)),
@@ -859,6 +867,9 @@ fn ui(args: &[String]) -> Result<ExitCode> {
             repo.unwrap_or(repo_root().unwrap_or(std::env::current_dir()?)),
         )))
     };
+    // Amp starts with its tools on; --agent-tools off asks from memory only.
+    agent.tools =
+        tools.unwrap_or(conductor_model::agent::AgentSelection::starting(agent.kind).tools);
     agent.validate().map_err(anyhow::Error::msg)?;
     if run_id.is_some() && agent != Default::default() {
         bail!(

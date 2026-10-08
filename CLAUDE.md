@@ -108,7 +108,11 @@ is documented in `docs/agent-workbench.md`: question agent/model selection (Clau
 and experimental Pi with no tools), a numeric-series widget, workbench layout,
 source/receipt inspection, and retained follow-up drafts. Krunal subsequently requested
 Copilot and Amp, the runtimes used at work: their no-tools question adapters,
-Copilot model selection, and Amp mode selection are included. Existing check and review
+Copilot model selection, and Amp mode selection are included. On 2026-10-02 Krunal, at
+work, asked Amp how a repository computes its default branch and it could not read the
+repository; he asked for Amp's tools to be configurable and all on for now. Amp questions
+now run with Amp's own tools and permission rules unless switched off; Copilot and Pi
+still have none. Existing check and review
 semantics remain unchanged. The design mockup includes later capabilities; do not
 claim all its adapters, handoffs, or replay controls are implemented.
 

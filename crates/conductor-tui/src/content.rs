@@ -335,6 +335,13 @@ pub fn math(text: &str) -> String {
     while let Some(c) = rest.chars().next() {
         if line_start && rest.trim_start_matches(' ').starts_with("```") {
             fenced = !fenced;
+            // Consume the whole delimiter line so its closing backticks cannot
+            // be mistaken for inline code that swallows the following maths.
+            let end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            line_start = true;
+            continue;
         }
         line_start = c == '\n';
         if fenced {

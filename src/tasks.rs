@@ -113,7 +113,7 @@ impl TaskSource for RepoRuns {
                     kind: "Question".into(),
                     state: q.turns.last().map(|t| t.state).unwrap_or(State::Stopped),
                 },
-                context: q.agent.kind.scope().into(),
+                context: q.agent.scope(),
                 body: String::new(),
                 evidence: vec![],
                 activity: vec![],

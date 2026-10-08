@@ -117,8 +117,8 @@ where its content ends; long answers and expanded evidence scroll with a positio
 stop at the end (`Home`, `End`); "no sources" is said once; `t` opens a Questions tab that
 lists the task's questions and shows each answer as it is selected.
 
-Not built: choosing an agent's tools or picking its model from a list. That needs a
-written scope and a check of the real Amp and Copilot CLIs.
+Amp has an overall tools on/off switch. Selecting individual tools or picking a
+model from a discovered list is not built.
 
 ## Runtime boundaries
 
@@ -127,7 +127,7 @@ written scope and a check of the real Amp and Copilot CLIs.
 | Claude Code | Existing web question runner, model override, follow-ups, clarification, captures and activity | Authenticated Claude CLI required; existing safe-mode restrictions retained |
 | Pi (experimental) | One-shot JSON question runner, runtime model/provider selection, structured results, clarification and usage | Tools and discovered resources disabled; no live web lookup, repository editing, extension dialogs, or coding workflow stages |
 | GitHub Copilot (experimental) | JSONL question runner, model selection, structured results, clarification and usage | Copilot CLI access must be enabled for the account/organization; no tools or live sources; billing multiplier is not displayed as dollars |
-| Amp (experimental) | Streaming JSON question runner, optional Amp mode, structured results, clarification and usage | Tools disabled through scratch workspace settings; IDE context disabled; no tools or live sources; no model ID override |
+| Amp (experimental) | Streaming JSON question runner, optional Amp mode, structured results, clarification and usage. Tools on by default since 2026-10-02 (`--agent-tools off`, or `t` in the `F3` picker, switches them off): each tool call and result is a step, and a page or file Amp read is captured as the source | With tools on, Amp runs with the person's own Amp tools, MCP servers and permission rules; conductor does not limit them and never passes `--dangerously-allow-all`. The prompt asks it not to change files, which is a request, not a control. Not yet run against a live Amp: the tool events are parsed in the Claude-compatible shape the adapter already used. With tools off: no tools or live sources. IDE context disabled; no model ID override |
 | Native operations | Local Git/report captures and refresh | No model involved |
 
 The Pi adapter follows the documented [JSON event stream](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/json.md)
@@ -140,8 +140,9 @@ Copilot uses its [programmatic interface](https://docs.github.com/en/copilot/ref
 and [session event schema](https://github.com/github/copilot-sdk/blob/main/nodejs/src/generated/session-events.ts).
 Amp uses [streaming JSON](https://ampcode.com/docs/cli/streaming-json) and
 [workspace tool settings](https://ampcode.com/docs/cli/settings). The adapters require
-completion events and a clean exit. Unexpected tool exposure or execution stops the
-Copilot/Amp question. User and organization runtime policies still apply.
+completion events and a clean exit. Tool exposure or execution stops a Copilot
+question or an Amp question with tools switched off. With Amp tools on, calls and
+results are recorded as activity. User and organization runtime policies still apply.
 
 Credentials remain with the selected CLI. For testing or an alternate executable,
 `CONDUCTOR_CLAUDE_BIN`, `CONDUCTOR_PI_BIN`, `CONDUCTOR_COPILOT_BIN`, and
@@ -190,8 +191,10 @@ remain readable as text. Agents cannot create commands, controls, or trusted che
 verdicts through presentation data. Selection, rendering, and inspection are local.
 
 The source record distinguishes citations from matched tool captures and discloses
-that factual accuracy is not independently checked. Pi, Copilot, and Amp supply no captured web
-evidence in this mode. Provider-generated capture metadata is discarded.
+that factual accuracy is not independently checked. Pi, Copilot, and Amp with tools
+off supply no captured web evidence. With Amp tools on, supported web and file tool
+results can be matched to citations. Capture metadata supplied in the answer is
+discarded; captured evidence comes from recorded tool results.
 
 The workflow receipt inspector reads the existing receipt with its checks, gaps,
 execution metadata, and integrity identifiers. It does not run verification or
@@ -228,5 +231,6 @@ terminal I/O, task loading, and agent execution. The design's end-to-end latency
 targets remain unverified. Idle demo frames no longer redraw continuously.
 
 Not implemented in this slice: Codex/ACP adapters, direct model API execution,
-Pi/Copilot/Amp tool execution and coding stages, Pi RPC interaction, cross-agent handoff, arbitrary generated UI, multi-artifact
-composition, production replay, mouse controls, and new Jira/QA/ops executors.
+Pi/Copilot tool execution, Pi/Copilot/Amp coding stages, Pi RPC interaction,
+cross-agent handoff, arbitrary generated UI, multi-artifact composition, production
+replay, mouse controls, and new Jira/QA/ops executors.

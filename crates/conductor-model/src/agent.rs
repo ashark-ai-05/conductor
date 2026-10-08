@@ -51,10 +51,33 @@ pub struct AgentSelection {
     /// Amp mode; Amp controls the model routing behind it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Whether the runtime's own tools are switched on for this question. Amp only today;
+    /// a saved question without this field ran with no tools.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tools: bool,
 }
 
 impl AgentSelection {
+    /// A new selection of `kind` as the UI and CLI start it: Amp with its tools on.
+    pub fn starting(kind: AgentKind) -> Self {
+        Self {
+            kind,
+            tools: kind == AgentKind::Amp,
+            ..Default::default()
+        }
+    }
+    /// What the agent can reach in a question, in the words shown beside the request.
+    pub fn scope(&self) -> String {
+        if self.kind == AgentKind::Amp && self.tools {
+            "Amp's own tools · Amp's permission rules · No project files supplied".into()
+        } else {
+            self.kind.scope().into()
+        }
+    }
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.tools && self.kind != AgentKind::Amp {
+            return Err("Tools can be switched on only for Amp in this version.");
+        }
         if self.kind == AgentKind::Amp && self.model.is_some() {
             return Err(
                 "Amp chooses its models. Use --agent-mode or the Mode field instead of --model.",
