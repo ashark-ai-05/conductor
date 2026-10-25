@@ -136,7 +136,7 @@ impl Capture {
                         .map(|r| ResultRow {
                             cells: columns
                                 .iter()
-                                .map(|k| r.get(k).map(&cell).unwrap_or_else(|| "—".into()))
+                                .map(|k| r.get(k).map(cell).unwrap_or_else(|| "—".into()))
                                 .collect(),
                             sources: vec![],
                         })
