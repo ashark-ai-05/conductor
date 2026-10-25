@@ -2,6 +2,7 @@
 name = "conductor-tui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "The conductor terminal UI, built to run as a herdr pane"
 publish = false
 
