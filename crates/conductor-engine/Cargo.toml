@@ -2,6 +2,7 @@
 name = "conductor-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Runs a workflow: stages, agents, checks, retries, and the record of it all"
 publish = false
 

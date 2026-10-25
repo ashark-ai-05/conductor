@@ -2,6 +2,7 @@
 name = "conductor-model"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Workflows, events, the evidence chain and receipts"
 publish = false
 

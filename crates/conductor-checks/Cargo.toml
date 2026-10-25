@@ -2,6 +2,7 @@
 name = "conductor-checks"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Checks conductor runs in its own process: commands, scope, test results, mutation scores"
 publish = false
 

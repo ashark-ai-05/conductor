@@ -16,7 +16,10 @@ evidence. Built in Rust. Runs standalone or inside [Herdr](https://github.com/he
 
 ## Install and try
 
-Requires Git and a current stable Rust toolchain.
+Download the archive for your platform from the
+[latest release](https://github.com/ashark-ai-05/conductor/releases/latest), put
+`conductor` on your `PATH`, and run `conductor ui --demo`. Or build from source with Git
+and a current stable Rust toolchain:
 
 ```sh
 git clone https://github.com/ashark-ai-05/conductor.git
@@ -90,3 +93,7 @@ record integrity. See the [bug-fix example](examples/sdlc-mock/README.md).
 [Local reports](docs/native-capabilities.md) ·
 [Design study](docs/design/agent-workbench/README.md) ·
 [Animation source](docs/media/README.md)
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

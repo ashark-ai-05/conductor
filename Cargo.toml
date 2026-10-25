@@ -6,6 +6,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/ashark-ai-05/conductor"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -35,6 +36,7 @@ all = { level = "warn", priority = -1 }
 name = "conductor"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Agentic software work with receipts"
 publish = false
 
